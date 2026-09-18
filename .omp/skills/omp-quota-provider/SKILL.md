@@ -128,11 +128,24 @@ var PLUGINS = [
 Der Registry-Konsistenztest vergleicht `providers/*.js` gegen `PLUGINS` und fängt
 „Datei angelegt, Import vergessen" von selbst — dafür ist nichts zu tun.
 
-## 7. Abnahme (alle drei, in dieser Reihenfolge)
+## 7. Abnahme (alle vier, in dieser Reihenfolge)
 
 ```sh
 bun test
+bun scripts/analyze.js      # exit 0 = sauber
 ```
+
+`scripts/analyze.js` prüft genau die Fehler, die hier entstehen:
+
+| Regel | fängt |
+|---|---|
+| `provider-registry` | Datei ohne `.import`, `.import` ohne `PLUGINS`-Eintrag, Import auf nicht existierende Datei, unsortierte Imports |
+| `plugin-discipline` | Descriptor ohne `id`/`name`, Plugin mit eigenem `strip` |
+| `provider-coverage` | Plugin, dessen `name` gleich `fallbackName(id)` ist und das keine `unlimitedWindows` trägt — tote Datei; außerdem Plugin ohne Beleg in `tests/providers.test.js` |
+| `skill` | diese Skill nennt eine Funktion, die es nicht mehr gibt |
+
+Ein Plugin, das `provider-coverage` auslöst, ist Abschnitt 1 zum zweiten Mal:
+Datei löschen, nicht die Regel drehen.
 
 Qt-Runtime: die `.import`-Kette scheitert in `bun` nie, in QML schon (Tippfehler im
 Pfad, ES6-Syntax). Temporäre Datei im Plugin-Wurzelverzeichnis, Exit 42 = ok:
@@ -174,3 +187,10 @@ omarchy-shell cabroe.omp-quota close
   `omp usage --json` prüfen.
 - **Plugin für einen ableitbaren Namen** — siehe Abschnitt 1.
 - **`omarchy restart shell` überspringen** — QML-Fehler zeigen sich erst dort.
+
+## Nicht hier, sondern in `skill://omp-quota-plugin`
+
+Alles, was nicht providerspezifisch ist: Einstellungen anlegen,
+Fetch-Lifecycle und Watchdog, Farbrampe und Layout, `usage.sh`, Bar-Label,
+und die Regel, dass pure Logik nach `Usage.js` gehört statt als
+Inline-Ausdruck in `Panel.qml` zu bleiben.

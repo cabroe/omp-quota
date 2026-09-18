@@ -437,58 +437,105 @@ function checkProviderCoverage(root, addFinding) {
 
 // ---------- Regel 7: Skill-Drift -----------------------------------------
 
-// Die Projekt-Skill ist die Anleitung, nach der ein Provider angelegt wird.
-// Sie nennt API-Namen in Backticks (`resolve(`, `stripTokens(`, …). Wird
-// eine dieser Funktionen umbenannt, zeigt die Skill auf nichts mehr und
-// führt den nächsten Durchgang in die Irre — das fängt kein Test ab.
+// Die Projekt-Skills sind die Anleitungen, nach denen an diesem Plugin
+// gearbeitet wird. Sie nennen API-Namen in Backticks (`resolve(`,
+// `rampFactor(`, …). Wird eine dieser Funktionen umbenannt, zeigt die Skill
+// auf nichts mehr und führt den nächsten Durchgang in die Irre — das fängt
+// kein Test ab.
+//
+// Geprüft wird jedes Verzeichnis unter .omp/skills/, nicht ein fester Pfad:
+// die zweite Skill wäre sonst ungeprüft dazugekommen. `REQUIRED_SKILLS`
+// hält fest, welche Anleitungen zum Vertrag gehören.
+var REQUIRED_SKILLS = ["omp-quota-provider", "omp-quota-plugin"];
+
 function checkSkillDrift(root, addFinding) {
-  const skillPath = join(root, ".omp", "skills", "omp-quota-provider", "SKILL.md");
-  if (!existsSync(skillPath)) {
-    addFinding("skill", SEVERITY.error,
-      "Projekt-Skill .omp/skills/omp-quota-provider/SKILL.md fehlt — die Provider-Anleitung ist Teil des Vertrags",
-      ".omp/skills/omp-quota-provider/SKILL.md");
-    return;
-  }
-  const skill = readText(skillPath);
-
-  // Frontmatter: ohne name/description ist die Skill nicht auffindbar.
-  if (!/^---\r?\n[\s\S]*?\bname:\s*omp-quota-provider\b[\s\S]*?^---/m.test(skill)) {
-    addFinding("skill", SEVERITY.error,
-      "Frontmatter ohne `name: omp-quota-provider` — Discovery greift nicht",
-      "SKILL.md");
-  }
-  if (!/\bdescription:\s*\S/.test(skill)) {
-    addFinding("skill", SEVERITY.error,
-      "Frontmatter ohne `description` — Discovery greift nicht", "SKILL.md");
+  const skillsDir = join(root, ".omp", "skills");
+  let names = [];
+  try {
+    names = readdirSync(skillsDir);
+  } catch {
+    // Verzeichnis fehlt komplett — unten als fehlende Pflicht-Skill gemeldet.
   }
 
-  // API-Namen aus Inline-Code der Form `name(` gegen die echten
-  // Top-Level-Deklarationen in Providers.js und Usage.js halten.
-  let sources = "";
-  for (const rel of ["Providers.js", "Usage.js"]) {
-    try {
-      sources += readText(join(root, rel)) + "\n";
-    } catch {
-      // Fehlende Kerndatei melden andere Regeln.
-    }
-  }
-  if (sources === "") return;
-  const named = new Set();
-  for (const m of skill.matchAll(/`([A-Za-z_$][\w$]*)\(/g)) named.add(m[1]);
-  for (const name of named) {
-    const declared = new RegExp(`^(?:var|function)\\s+${name}\\b`, "m");
-    if (!declared.test(sources)) {
+  for (const required of REQUIRED_SKILLS) {
+    if (!existsSync(join(skillsDir, required, "SKILL.md"))) {
       addFinding("skill", SEVERITY.error,
-        `SKILL.md nennt \`${name}()\`, aber weder Providers.js noch Usage.js deklarieren das`,
-        "SKILL.md");
+        `Pflicht-Skill .omp/skills/${required}/SKILL.md fehlt — die Anleitung ist Teil des Vertrags`,
+        `.omp/skills/${required}/SKILL.md`);
     }
   }
 
-  // Das Feld, um das sich Abschnitt 4 dreht, muss im Kern noch existieren.
-  if (!/\bunlimitedWindows\b/.test(sources)) {
-    addFinding("skill", SEVERITY.error,
-      "SKILL.md erklärt `unlimitedWindows`, der Kern kennt das Feld nicht mehr",
-      "SKILL.md");
+  // Alle Quellen, die eine Skill benennen darf — JS-Libraries, QML und die
+  // Shell. Jede Sprache deklariert anders, also je Datei ein eigenes
+  // Muster; ein gemeinsamer Text-Blob würde auch Kommentar-Erwähnungen als
+  // Deklaration durchgehen lassen.
+  const declared = new Set();
+  const collect = (rel, pattern) => {
+    let src;
+    try {
+      src = readText(join(root, rel));
+    } catch {
+      return; // Fehlende Kerndatei melden andere Regeln.
+    }
+    for (const m of src.matchAll(pattern)) declared.add(m[1]);
+  };
+  // QML-JS-Libraries: `var x = …` / `function x(…)` am Zeilenanfang.
+  collect("Providers.js", /^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm);
+  collect("Usage.js", /^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm);
+  // QML: `function x(…)` beliebig eingerückt.
+  collect("Panel.qml", /^\s*function\s+([A-Za-z_$][\w$]*)\s*\(/gm);
+  // bash: `x() {`.
+  collect("usage.sh", /^\s*(?:function\s+)?([A-Za-z_][\w]*)\s*\(\)\s*\{/gm);
+
+  // Funktionen, die eine Skill ausdrücklich als Anti-Pattern nennt und die
+  // es deshalb NICHT geben darf. Die Prüfung läuft umgekehrt: taucht eine
+  // davon als echte Deklaration auf, wurde das Anti-Pattern umgesetzt.
+  const FORBIDDEN = ["setting"];
+  for (const fn of FORBIDDEN) {
+    if (declared.has(fn)) {
+      addFinding("skill", SEVERITY.error,
+        `\`${fn}()\` ist als Anti-Pattern dokumentiert, wird aber deklariert`,
+        "Panel.qml");
+    }
+  }
+
+  for (const name of names) {
+    const skillPath = join(skillsDir, name, "SKILL.md");
+    if (!existsSync(skillPath)) continue;
+    const loc = `.omp/skills/${name}/SKILL.md`;
+    const skill = readText(skillPath);
+
+    // Frontmatter: ohne passenden `name` und ohne `description` greift die
+    // Discovery nicht, und die Skill ist praktisch nicht vorhanden.
+    const frontmatter = new RegExp(
+      `^---\\r?\\n[\\s\\S]*?\\bname:\\s*${name}\\b[\\s\\S]*?^---`, "m");
+    if (!frontmatter.test(skill)) {
+      addFinding("skill", SEVERITY.error,
+        `Frontmatter ohne \`name: ${name}\` — Discovery greift nicht`, loc);
+    }
+    if (!/\bdescription:\s*\S/.test(skill)) {
+      addFinding("skill", SEVERITY.error,
+        "Frontmatter ohne `description` — Discovery greift nicht", loc);
+    }
+
+    if (declared.size === 0) continue;
+    const mentioned = new Set();
+    for (const m of skill.matchAll(/`([A-Za-z_$][\w$]*)\(/g)) mentioned.add(m[1]);
+    for (const fn of mentioned) {
+      if (declared.has(fn) || FORBIDDEN.indexOf(fn) >= 0)
+        continue;
+      addFinding("skill", SEVERITY.error,
+        `nennt \`${fn}()\`, aber keine Quelle (Providers.js, Usage.js, Panel.qml, usage.sh) deklariert das`,
+        loc);
+    }
+
+    // Das Feld, um das sich die Phantom-Fenster drehen, muss im Kern noch
+    // existieren — sonst erklärt die Skill einen Vertrag, den es nicht gibt.
+    if (/\bunlimitedWindows\b/.test(skill) && !declared.has("unlimitedWindows")
+        && !/\bunlimitedWindows\b/.test(readText(join(root, "Providers.js")))) {
+      addFinding("skill", SEVERITY.error,
+        "erklärt `unlimitedWindows`, der Kern kennt das Feld nicht mehr", loc);
+    }
   }
 }
 

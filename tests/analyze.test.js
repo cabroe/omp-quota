@@ -399,4 +399,68 @@ describe("analyze.js: Skill", () => {
       f.message.includes("Frontmatter"),
     )).toBe(true);
   });
+
+  test("beide Pflicht-Skills werden einzeln verlangt", async () => {
+    const tree = registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]);
+    // Nur die Provider-Skill vorhanden — die Plugin-Skill muss fehlen.
+    tree[".omp/skills/omp-quota-provider/SKILL.md"] =
+      `---\nname: omp-quota-provider\ndescription: "x"\n---\n\nText.\n`;
+    writeTree(root, tree);
+
+    const { parsed } = await runAnalyzer(root);
+    const skill = byRule(parsed.findings, "skill");
+    expect(skill.some((f) => f.message.includes("omp-quota-plugin"))).toBe(true);
+    expect(skill.some((f) => f.message.includes("omp-quota-provider"))).toBe(false);
+  });
+
+  test("Funktionen aus Panel.qml und usage.sh gelten als deklariert", async () => {
+    const tree = registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]);
+    tree["Panel.qml"] = `import QtQuick\nItem {\n  function colorFor(f) { return f }\n}\n`;
+    tree["usage.sh"] =
+      `#!/bin/bash\nset -o pipefail\njson_string() { printf '%s' "$1"; }\n` +
+      `OMP=$(command -v omp)\nrun_omp() { "$OMP" "$@"; }\nrun_omp usage --json\n`;
+    for (const name of ["omp-quota-provider", "omp-quota-plugin"]) {
+      tree[`.omp/skills/${name}/SKILL.md`] =
+        `---\nname: ${name}\ndescription: "x"\n---\n\n` +
+        "Siehe `colorFor(` und `json_string(`.\n";
+    }
+    writeTree(root, tree);
+
+    const { parsed } = await runAnalyzer(root);
+    const skill = byRule(parsed.findings, "skill");
+    expect(skill.some((f) => f.message.includes("colorFor"))).toBe(false);
+    expect(skill.some((f) => f.message.includes("json_string"))).toBe(false);
+  });
+
+  test("als Anti-Pattern dokumentiertes setting() darf nicht deklariert sein", async () => {
+    const tree = registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]);
+    // Genau der Fehler, den die Skill verbietet: der geerbte Helfer wird
+    // hier tatsächlich angelegt.
+    tree["Panel.qml"] = `import QtQuick\nItem {\n  function setting(key) { return null }\n}\n`;
+    for (const name of ["omp-quota-provider", "omp-quota-plugin"]) {
+      tree[`.omp/skills/${name}/SKILL.md`] =
+        `---\nname: ${name}\ndescription: "x"\n---\n\nNie \`setting(\` benutzen.\n`;
+    }
+    writeTree(root, tree);
+
+    const { parsed } = await runAnalyzer(root);
+    expect(byRule(parsed.findings, "skill").some((f) =>
+      f.message.includes("Anti-Pattern"),
+    )).toBe(true);
+  });
 });

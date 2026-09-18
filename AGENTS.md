@@ -57,7 +57,7 @@ refresh() (poll / open / r / R / right-click / middle-click)
 | `usage.sh` | PATH-robust wrapper around `omp usage --json`, timeouts, JSON guarantee |
 | `tests/` | `bun test` suites + `load.js` (QML-library loader for Bun) |
 | `scripts/analyze.js` | Static analysis (`bun scripts/analyze.js`): rules the test suite cannot express — see below |
-| `.omp/skills/omp-quota-provider/` | Project skill: full procedure for adding a provider (readable via `skill://omp-quota-provider`) |
+| `.omp/skills/` | Two project skills: `omp-quota-provider` (add a provider) and `omp-quota-plugin` (the widget itself — settings, lifecycle, colours, `usage.sh`). Both are required; the `skill` rule enforces existence, frontmatter and API references |
 | `.github/workflows/tests.yml` | CI: `bun test` on push/PR to `main` |
 
 Other plugin directories under `~/.config/omarchy/plugins/` are references,
@@ -304,8 +304,12 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   whose `name` equals `fallbackName(id)` and carries no `unlimitedWindows`
   is dead configuration — the derivation is loaded from the real
   `Providers.js` via `tests/load.js`, never reimplemented), and `skill`
-  (project skill exists, has discoverable frontmatter, and every
-  `` `fn(` `` it names is still declared in `Providers.js`/`Usage.js`).
+  (every skill directory under `.omp/skills/` is checked, not a fixed path —
+  both `REQUIRED_SKILLS` exist, frontmatter `name`/`description` match the
+  directory, and every `` `fn(` `` a skill names is declared in
+  `Providers.js`, `Usage.js`, `Panel.qml` or `usage.sh`. Names in
+  `FORBIDDEN` — currently `setting` — are checked in reverse: a skill may
+  name them as an anti-pattern, and a real declaration is the finding).
 - `tests/analyze.test.js` drives the analyzer as a subprocess over temp-dir
   fixtures (`--root=`, `--json`); each rule has a violating fixture, and
   `provider-coverage` additionally pins both justifications (deviating
