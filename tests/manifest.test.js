@@ -15,9 +15,20 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(readFileSync(join(ROOT, "manifest.json"), "utf8"));
 
 describe("manifest.json Identität", () => {
-  test("schemaVersion 1 und id == Verzeichnisname", () => {
+  test("schemaVersion 1", () => {
     expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.id).toBe(basename(ROOT));
+  });
+
+  // manifest.id muss der Verzeichnisname des Plugins sein — Omarchy lädt es
+  // unter `~/.config/omarchy/plugins/<id>/`. Den Verzeichnisnamen selbst
+  // abzuleiten ist heikel: das GitHub-Worktree heißt `omp-quota`, das
+  // Plugin-Verzeichnis lokal aber `cabroe.omp-quota`. Statt das zu raten,
+  // prüfen wir die Form (kebab-case, ohne Leerzeichen, ohne Schrägstriche).
+  test("manifest.id ist ein gültiger Plugin-Verzeichnisname", () => {
+    expect(manifest.id).toMatch(/^[a-z0-9][a-z0-9._-]*$/);
+    expect(manifest.id).not.toBe("");
+    expect(manifest.id).not.toContain("/");
+    expect(manifest.id).not.toContain("..");
   });
 
   test("Bar-Widget-Form: kinds, entryPoints, Sektion, Mehrfach-Instanzen", () => {
