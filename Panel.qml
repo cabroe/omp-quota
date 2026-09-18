@@ -600,11 +600,7 @@ Panel {
     // statt eines größeren topPadding: die Lücke soll zum abgeschlossenen
     // Block gehören, nicht vor den nächsten wandern — sonst klebt der
     // letzte Provider an der Fußzeile, während alle anderen Luft haben.
-    //
-    // Einheitlich, nicht je Provider: ein Sonderabstand für einzelne IDs
-    // wäre Providerwissen im Panel, und gemessen sind die Lücken ohnehin
-    // gleich (45–48 px). Kurze Blöcke mit zwei Zeilen wirken nur dichter.
-    bottomPadding: Style.space(12)
+    bottomPadding: Style.space(8)
     // Während eines Abrufs, der Provider entfernt, kann der Index kurz ins
     // Leere zeigen.
     visible: providerBlock.provider !== null
