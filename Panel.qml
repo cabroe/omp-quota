@@ -121,9 +121,15 @@ Panel {
   readonly property real metaOpacity: 0.75
   // Basisfarbe eines noch leeren Balkens. `accent` statt `foreground`: der
   // Balken ist eine Fläche, kein Text, und soll sich von der Beschriftung
-  // absetzen. Themes ohne eigenen Akzent liefern hier denselben Wert wie
-  // foreground — dann verhält sich die Rampe wie vorher, nur ohne Sprung.
-  readonly property color calm: bar && bar.accent ? bar.accent : Color.accent
+  // absetzen. Themes ohne eigenen Akzent setzen accent gleich foreground —
+  // dann verhält sich die Rampe wie vorher, nur ohne Sprung.
+  //
+  // Direkt über `Color`, nicht über `bar`: die Plugin-Bar-API
+  // (Ui/PluginBarApi.qml) führt foreground, barForeground, background und
+  // urgent — kein accent. Ein `bar.accent`-Zweig wäre immer undefined und
+  // damit toter Code. `Color.accent` wird beim Themewechsel neu zugewiesen,
+  // das Binding bleibt also reaktiv.
+  readonly property color calm: Color.accent
 
   // Mischt zwei Farben linear. Qt.tint() kann das nicht: es rechnet über
   // Alpha-Komposition, und ein Faktor unter 1 ergäbe eine halbdurchsichtige

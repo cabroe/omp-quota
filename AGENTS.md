@@ -146,6 +146,16 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   the bar strings (`barText`, `barTooltip`); `Panel.qml` only binds. What
   stays in QML is what needs QML: `mix()` (needs `Qt.rgba`), colour/theme
   properties, and the fetch lifecycle.
+- Theme switches take effect live, without `omarchy restart shell`: `Color`'s
+  foundational palette is reassigned from the shell IPC payload, and every
+  colour here is a binding on `Color.*` or on the mirrored `bar.*`. Verified
+  by switching Catppuccin → Gruvbox with the popup open; meters re-based
+  from blue and teal respectively. Colours must therefore stay bindings —
+  never snapshot a `Color.*` value into a plain `var` at startup.
+- The plugin bar API (`Ui/PluginBarApi.qml`) exposes `foreground`,
+  `barForeground`, `background`, `urgent`, `fontFamily`, `position`,
+  `vertical`, `barSize` — and **no** `accent`. `calm` therefore reads
+  `Color.accent` directly; a `bar.accent` fallback branch is dead code.
 - Literal opacities are declared as properties (`metaOpacity`), not inlined;
   the `panel-hardcoding` rule flags bare values above 0.5.
 - Reactive clock: `nowMs` property + 30 s timer running only while
