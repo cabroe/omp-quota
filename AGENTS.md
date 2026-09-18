@@ -1,419 +1,274 @@
 # Repository Guidelines
 
-Omarchy-Bar-Plugin **cabroe.omp-quota** — zeigt Kontingente des `omp`-Agenten
-([oh-my-pi](https://github.com/can1357/oh-my-pi)) für Anthropic, Z.ai, Google
-Antigravity, MiniMax Code, OpenAI Codex, OpenRouter und GitHub Copilot in
-einem Bar-Widget samt Popup.
-
 ## Project Overview
 
-- **Zweck:** `omp usage --json` ausführen, das Ergebnis auf eine
-  einheitliche Form bringen, in der Bar das knappste Fenster (Prozent) und
-  im Popup jedes Fenster mit Füllstand, Status, Reset-Countdown und Zugang
-  zeigen.
-- **Plugin-Form:** Omarchy-Bar-Widget (`kinds: ["bar-widget"]`,
-  `entryPoints.barWidget: "Panel.qml"`). Identifikation als
-  `moduleName` / `ipcTarget: "cabroe.omp-quota"`.
-- **Aktivierung:** `on-demand`. Wird in der Bar angezeigt, sobald es
-  aktiviert ist.
-- **IPC-Befehle:** `omarchy-shell cabroe.omp-quota open|close|toggle`.
+Omarchy bar-widget plugin **cabroe.omp-quota** — shows the AI provider quotas
+managed by the [omp](https://github.com/can1357/oh-my-pi) agent (Anthropic,
+Z.ai, Google Antigravity, MiniMax Code, OpenAI Codex, OpenRouter, GitHub
+Copilot): tightest quota as a number in the bar, every window with usage,
+status, reset countdown and access in a popup. Runtime is Quickshell (Qt/QML
+6) inside the Omarchy shell; tests run under Bun.
+
+Widget UI labels are German (`unbegrenzt`, `erschöpft`, `Stand vor 3m`).
+Code comments in this repo are German by convention.
 
 ## Architecture & Data Flow
 
 ```
-usage.sh  ──► stdout JSON  ──►  Usage.js: parse()  ──►  Panel.qml (report)
-   ▲                                │                       │
-   │                                ▼                       ▼
-refresh() (poll / open / r / R /    Providers.js          render
-right-click / middle-click)         .resolve(id)
-                                   → descriptor
-                                   (name, strip,
-                                    unlimitedWindows)
+usage.sh ──► stdout JSON ──► Usage.js: parse() ──► Panel.qml (render)
+   ▲                 │
+   │                 └──► Providers.js: resolve(id) ──► providers/*.js
+refresh() (poll / open / r / R / right-click / middle-click)
 ```
 
-1. **Trigger:** `Component.onCompleted`, `pollTimer`
-   (`refreshIntervalSec`), `onOpenedChanged`, Mittelklick / `r` (refresh),
-   Rechtsklick / `R` / `f` (refresh mit `--fresh`), `onRedactChanged`.
-2. **Prozess:** `Process { id: usageProcess }` ruft `/bin/bash usage.sh` mit
-   optional `--redact` und/oder `--fresh` auf. `usage.sh` lokalisiert `omp`
-   (Hyprland-PATH ist nicht Login-PATH) und führt `omp usage --json` unter
-   `timeout -k 2 20` aus (2 s KILL-Gnade für ein TERM-ignorierendes omp;
-   die KILL-Phase meldet exit 137 und wird wie 124 behandelt). Bei `--fresh`
-   wird vorher `omp usage invalidate` mit eigenem Kurz-Budget (3 s) aufgerufen.
-3. **JSON-Pfad:** `usage.sh` garantiert, dass stdout immer ein JSON-Objekt
-   ist (im Fehlerfall `{"error": "..."}`, inklusive omps stderr). Eine
-   Vorspann-Sed-Pipeline schneidet auf das erste `{` zu; ergibt das nichts,
-   ist es ebenfalls ein Fehlerobjekt.
-4. **Normalisierung:** `Usage.js` (`pragma library`, reine Funktionen,
-   ohne QML-Abhängigkeit) glättet fünf Eigenheiten des Rohreports:
-   uneinheitliche Mengenangaben → `usedFraction` als Wahrheit;
-   `scope.sharedGroup` (Google Antigravity) wird per `dedupe()` auf eine
-   Zeile reduziert (höchster Füllstand gewinnt); Labels werden von
-   redundanten Provider-/Fenstertokens befreit; ein providerübergreifend
-   gleiches Konto wandert per `collapseAccounts()` nach `sharedAccount`;
-   ein Fenster ohne Kontingent wird als `unlimited` markiert statt als
-   0-%-Limit — welche Fenster das pro Provider sind, hält jetzt das
-   jeweilige Provider-Plugin in `providers/` (`unlimitedWindows`), nicht
-   mehr `Usage.js`.
-5. **Provider-Registry:** `Providers.js` aggregiert die Plugins in
-   `providers/<Name>.js` zu `PLUGINS`, baut darauf eine `BY_ID`-Map und
-   liefert `resolve(id)` immer einen vollständigen Descriptor (Name,
-   Strip-Tokens, Phantom-Fenster). `Usage.js` ruft pro Report einmal
-   `resolve(report.provider)` und reicht den Descriptor an
-   `normalizeLimit` / `dedupe` weiter; unbekannte Provider erhalten einen
-   Fallback-Descriptor, dessen Name aus der ID per `[-_.]`-Trennung
-   automatisch entsteht (`fallbackName`). Der Kern enthält NULL
-   Providerwissen.
-6. **Render:** `Panel.qml` zeigt `worst` (knappster Wert über alle
-   Provider) als Zahl in der Bar; im Popup je Provider eine Liste nach
-   `durationMs` (kurz zuerst), je Limit Titel + Status/Absolutwert +
-   Reset-Countdown + Prozent + Meter-Animation.
-7. **Fehlerstrategie:** `fetchError` ist getrennt vom `report`; bei Fehler
-   bleiben die letzten Zahlen sichtbar, der Fehler steht daneben.
-   `failFetch()` läuft sowohl bei `onRunningChanged` (Skript fehlt) als auch
-   nach 25 s Watchdog (Hänger) — und der Watchdog **killt** den Prozess.
+1. **Trigger** (`Panel.qml`): `Component.onCompleted`, `pollTimer`
+   (`refreshIntervalSec`), popup open, middle-click/`r` (refresh),
+   right-click/`R`/`f` (refresh with `--fresh`), `onRedactChanged`.
+2. **Fetch**: `Process { id: usageProcess }` runs `/bin/bash usage.sh` with
+   optional `--redact`/`--fresh`. `usage.sh` locates `omp` (Hyprland PATH ≠
+   login PATH) and calls `omp usage --json` under `timeout -k 2 20`.
+3. **JSON guarantee**: `usage.sh` always writes one JSON object to stdout —
+   on failure `{"error": "..."}` including omp's stderr. A preamble sed
+   pipeline cuts everything before the first real `{`.
+4. **Normalization**: `Usage.js` (`.pragma library`, pure functions) →
+   `Providers.js` (registry, `resolve(id)`) → `providers/*.js` (one
+   descriptor per provider that needs one). The core is provider-free.
+5. **Render**: bar shows `worst` over all providers; popup lists providers
+   alphabetically, limits per provider by `durationMs` ascending, each with
+   title + status/amount + reset countdown + percent + animated meter.
+6. **Fetch lifecycle** (`Panel.qml`): a request arriving while a fetch runs
+   is queued (`queuedRefresh`/`queuedFresh`, `fresh` wins), never dropped;
+   `drainQueue()` replays it on `onRunningChanged`. `requestRedact` records
+   the redact setting at launch — `applyReport()` discards a response whose
+   setting no longer applies and refetches. `applyReport()`/`failFetch()`
+   bail out when `!pending` (late pipe fragments after a watchdog kill must
+   not overwrite the precise error). A 25 s watchdog kills a hung fetch.
+   `fetchError` is kept separate from `report`: on failure the last numbers
+   stay visible with the error next to them.
 
 ## Key Directories
 
-|Pfad|Zweck|
+| Path | Purpose |
 |---|---|
-|`manifest.json`|Plugin-Metadaten + Settings-Schema (Single Source of Truth für UI-Optionen)|
-|`Panel.qml`|Einziger Entry Point: `WidgetButton` (Bar) + `KeyboardPanel` (Popup)|
-|`Usage.js`|Reine Normalisierungsfunktionen, `.pragma library` — providerfrei, holt Strip-Tokens und Phantom-Fenster aus der Registry|
-|`Providers.js`|Aggregator: importiert alle Plugins in `providers/`, hält `PLUGINS` und die `BY_ID`-Map, exportiert `resolve(id)` und `fallbackName(id)`|
-|`providers/`|Ein Plugin je Provider, dessen Anzeigename oder Verhalten von der Ableitung abweicht: `Zai.js`, `OpenAICodex.js`, `OpenRouter.js`, `GitHubCopilot.js` (Schreibweise), `MinimaxCode.js` (Schreibweise + Phantom-Fenster). `anthropic` und `google-antigravity` brauchen keins — ihr Name fällt aus der ID|
-|`usage.sh`|PATH-robuster Wrapper um `omp usage --json`, mit Zeitlimit|
-|`tests/`|`bun test`-Suiten: `usage.test.js`, `usage-sh.test.js`, `manifest.test.js`, Registry-Konsistenztest; `load.js` lädt QML-`.pragma library`-Dateien für die Suite|
-|`.omp/skills/omp-quota-provider/`|Projekt-Skill (native Provider, `.omp/skills/*/SKILL.md`): Ablauf zum Anlegen eines Providers — Entscheidungsregel, Descriptor-Vertrag, Registry-Eintrag, Tests, Abnahme. Lesen per `skill://omp-quota-provider`|
-|`README.md`|Doku, Bedienung, IPC, Settings, Dev-Notizen, „Provider hinzufügen"|
-|`.gitignore`|Editor-Schrott (`*.swp`, `*~`, `.DS_Store`)|
+| `Panel.qml` | Only entry point: `WidgetButton` (bar) + `KeyboardPanel` (popup), lifecycle, refresh queueing, watchdog |
+| `Usage.js` | Pure normalization: raw JSON → render model; no provider knowledge |
+| `Providers.js` | Registry: imports `providers/*.js`, `PLUGINS`/`BY_ID`, `resolve(id)`, `fallbackName(id)`, `stripTokens(id, name)` |
+| `providers/` | One descriptor per provider whose name spelling or behavior deviates from derivation (5 files; `anthropic`, `google-antigravity` deliberately none) |
+| `usage.sh` | PATH-robust wrapper around `omp usage --json`, timeouts, JSON guarantee |
+| `tests/` | `bun test` suites + `load.js` (QML-library loader for Bun) |
+| `.omp/skills/omp-quota-provider/` | Project skill: full procedure for adding a provider (readable via `skill://omp-quota-provider`) |
+| `.github/workflows/tests.yml` | CI: `bun test` on push/PR to `main` |
 
-Andere Plugin-Verzeichnisse unter `~/.config/omarchy/plugins/` (z. B.
-`custom.wireguard`, `nixfred.trackpad-pulse`) sind Referenzen, nicht Teil
-dieses Repos.
+Other plugin directories under `~/.config/omarchy/plugins/` are references,
+not part of this repo.
 
 ## Development Commands
 
-**Hot reload:** Datei speichern reicht NICHT für die laufende Instanz —
-nötig ist immer:
-
 ```sh
-omarchy restart shell
-```
-
-**Settings setzen** (mit `--json`, sonst landen Zahlen als Strings):
-
-```sh
+bun test                                  # whole suite
+omarchy restart shell                     # REQUIRED after any change — saving files alone never reloads the widget
 omarchy bar set cabroe.omp-quota refreshIntervalSec 600 --json
 omarchy bar set cabroe.omp-quota alarmThreshold 75 --json
 omarchy bar set cabroe.omp-quota redact true --json
+omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggle
 ```
 
-**IPC smoke test:**
+- Numeric settings need `--json`, or they land as strings in `shell.json`.
+- No lint, no build step. QML errors only surface after
+  `omarchy restart shell` — always run it before judging a QML change.
+- QML-runtime smoke check without touching the running shell (exit 42 = ok):
 
-```sh
-omarchy-shell cabroe.omp-quota toggle
-```
-
-**Tests:**
-
-```sh
-bun test
-```
-
-**Format:** Es gibt keinen Lint- oder Build-Schritt im Repo. Andere
-Plugins verwenden `lint-qml.py`/`Makefile` — für dieses Plugin nicht
-nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
+  ```sh
+  cat > SmokeCheck.qml <<'EOF'
+  import QtQuick
+  import "Usage.js" as Usage
+  Item {
+    Component.onCompleted: {
+      var p = Usage.parse(JSON.stringify({ generatedAt: 1, reports: [
+        { provider: "minimax-code", limits: [ { id: "x", label: "General 7 Day",
+          window: { id: "7d", label: "7 Day", durationMs: 604800000, resetsAt: 9 },
+          amount: { usedFraction: 0, unit: "percent" }, status: "ok" } ] } ] })).providers[0]
+      Qt.exit(p.name === "MiniMax Code" && p.limits[0].statusLabel === "unbegrenzt" ? 42 : 7)
+    }
+  }
+  EOF
+  QT_QPA_PLATFORM=offscreen qml6 SmokeCheck.qml; echo "exit=$? (42=ok)"; rm -f SmokeCheck.qml
+  ```
 
 ## Code Conventions & Common Patterns
 
 ### QML (`Panel.qml`)
 
-- `pragma ComponentBehavior: Bound` (erste Zeile) — Property-Zugriffe
-  benötigen `id`-Referenz, Repeater-Delegates deklarieren
+- `pragma ComponentBehavior: Bound` first line; delegates declare
   `required property int index`.
-- IDs nur für Komponenten, die mehrfach gebraucht werden
-  (`usageProcess`, `watchdog`, `pollTimer`, `panel`, `flick`, `button`).
-- `implicitWidth/Height` aus der Bar-Komponente (`button`) propagieren.
-- `settings` direkt lesen — NICHT `setting()` aus `Ui/Panel.qml`. Die
-  geerbte Variante registriert keine Binding-Abhängigkeit, der Wert
-  bliebe auf seinem Startwert stehen. Direktzugriff macht Bindings reaktiv.
-- Erster Abruf in `Component.onCompleted`. Die spätere `settings`-Injektion
-  wird nicht abgewartet, sondern korrigiert: `refresh()` merkt sich in
-  `requestRedact`, mit welcher Redaktionseinstellung der Aufruf startete,
-  und `applyReport()` verwirft einen Report, dessen Einstellung nicht mehr
-  gilt.
-- `refresh()` verwirft nie eine Anfrage. Läuft ein Abruf, landet sie in
-  `queuedRefresh`/`queuedFresh` (`fresh` gewinnt) und wird in
-  `onRunningChanged` per `drainQueue()` nachgezogen.
-- `applyReport()` steigt bei `!pending` aus: nach einem Watchdog-Kill fällt
-  noch ein stdout-Fragment aus der Pipe, das die präzise Fehlermeldung nicht
-  überschreiben darf.
-- Repeater iterieren über Zähler (`providerCount`, `limitCount`) und lesen
-  Daten per Index (`providerAt()`, `limitAt()`), NICHT über das Array aus
-  `report`. Ein neues Array zerstört alle Delegates, und ein neu gebautes
-  Meter animiert nicht.
-- Reactive Clocks: `nowMs: Date.now()` als Property und ein 30-s-Timer, der
-  nur bei `root.opened || root.hasError` tickt. Der Fehlerfall gehört dazu,
-  weil `WidgetButton` `tooltipText` nur bei `onEntered` liest und der
-  Tooltip dort die Alterung des Abrufs nennt. NICHT über ein Signal auf
-  `tooltipHovered` lösen — das hinge an einer Qt-internen Signalreihenfolge.
-- Wiederverwendbare Blöcke als eigenständige `component`s am Dateiende:
-  `ProviderSection: Column { … }` für einen Provider-Abschnitt (Trennlinie
-  + Kopfzeile + Limit-Repeater) und `LimitRow: Column { … }` für die Zeile
-  (Titel + Status/Absolutwert + Reset + Prozent + Meter). Der Popup-Baum
-  bleibt dadurch flach genug, um ihn am Stück zu lesen.
-- Geschwister NIE über `parent.children[N]` adressieren — ein neues Element
-  davor verschiebt den Index und bricht das Layout still. `id` vergeben
-  (`providerTitle`, `providerMeta`).
-- Mehrfach gebrauchte Layout-Terme einmal benennen (`titleRow.tailWidth`):
-  Titelbreite und Spacer müssen exakt denselben Wert abziehen, sonst
-  driften sie beim nächsten Eingriff auseinander.
-- Lange Properties: `borderSpec`, `anchors.baseline` für Detail/Reset/
-  Prozent auf Titel-Baseline.
-- `Behavior on width { NumberAnimation { duration: 160; easing.type:
-  Easing.OutCubic } }` für die Meter-Füllung — funktioniert nur mit dem
-  Count-Modell oben.
+- Read settings **directly** on `settings` — never the inherited
+  `setting()` helper (its property access lives in `Ui/Panel.qml`, so a
+  binding here never registers a dependency and freezes at the initial
+  value). Direct access is reactive once the host injects `settings`.
+- Repeaters iterate over counts (`providerCount`, `limitCount`) with index
+  access (`providerAt(i)`, `limitAt(i)`), never over arrays: a new array
+  destroys all delegates and a rebuilt meter does not animate (`Behavior on
+  width` only fires on existing items).
+- Sibling elements are addressed by `id`, never `parent.children[N]`.
+- Reused layout terms get one name (`titleRow.tailWidth`) — title width and
+  spacer must subtract the identical value.
+- Reusable blocks are `component`s at file end (`ProviderSection`,
+  `LimitRow`).
+- Reactive clock: `nowMs` property + 30 s timer running only while
+  `opened || hasError` (the tooltip reads the aging of the last fetch).
+  Do not solve this via a hover signal — that depends on Qt-internal signal
+  ordering.
+- Hung process: the watchdog must set `usageProcess.running = false` AND
+  `usageProcess.signal(9)`. `running = false` maps to `QProcess::terminate()`
+  (SIGTERM), which bash defers while a foreground child runs; SIGKILL hits
+  bash, the sole holder of the stdout pipe, so `finished` is guaranteed and
+  the queue drains. `signal()` guards dead processes itself.
 
 ### JavaScript (`Usage.js`, `Providers.js`, `providers/*.js`)
 
-- `.pragma library` als erste Zeile (eigenständige Library, kein QML);
-  Imports anderer Libraries folgen direkt darunter als `.import "pfad.js"
-  as NS`. Keine ES6-Syntax: kein `let`/`const`, keine Arrow-Functions,
-  keine Template-Strings, keine `class`, kein `Object.assign`, kein Spread.
-  Nur `var` und `function` — der Test-Loader erkennt Exporte genau über
-  diese zwei Formen.
-- **Providerwissen lebt NUR in `providers/<Name>.js`** — und dort nur, was
-  omps Report NICHT hergibt: `var descriptor = { id, name }` plus optional
-  `unlimitedWindows`. `Providers.js` importiert alle Plugins alphabetisch,
-  führt sie in `PLUGINS` zusammen und baut daraus die `BY_ID`-Map mit
-  bereits vervollständigten Descriptoren. `resolve(id)` liefert IMMER alle
-  vier Felder (`id`, `name`, `strip`, `unlimitedWindows`), damit der Kern
-  nie gegen fehlende Felder prüfen muss; unbekannte IDs erhalten einen
-  Fallback-Descriptor, dessen Name per `[-_.]`-Trennung in
-  `fallbackName(id)` entsteht (`some-new-provider` → `Some New Provider`;
-  leer/fehlend → `Unbekannt`). `Usage.js` enthält NULL Providerwissen.
-- `strip` steht NICHT im Plugin: `stripTokens(id, name)` leitet die Tokens
-  aus ID **und** Anzeigenamen ab und dedupliziert case-insensitiv. Grund:
-  omps echte Labels führen den Provider fast nie („Claude 5 Hour",
-  „General 7 Day", „30 days") — von sieben Handlisten feuerte genau eine
-  („ZAI 5 Hours Token Quota"), und deren Token steckt in der ID. Beide
-  Quellen sind nötig, weil der Name Schreibweisen trägt, die die ID nicht
-  hergibt („Z.ai" mit Punkt). Der synthetische Fallback-Name geht NICHT in
-  die Tokens, sonst wäre „Unbekannt" bei leerer ID ein Strip-Token.
-- Ein Plugin gibt es nur, wo `fallbackName(id)` danebenliegt (`zai` →
-  „Zai", `minimax-code` → „Minimax Code") oder ein Quirk dazukommt.
-  `anthropic` und `google-antigravity` brauchen deshalb KEINE Datei — eine
-  anzulegen, die nur den ableitbaren Namen wiederholt, ist toter Eintrag.
-- Eine Provider-Datei ohne `PLUGINS`-Eintrag in `Providers.js` ist stumm:
-  der Registry-Konsistenztest fängt das.
-- `resolve()` darf KEINE Teilobjekte liefern — Kerncode vertraut auf
-  vollständige Felder und prüft nichts nach.
-- Reine Funktionen in `Usage.js`, keine Closures, keine `Date.now()`
-  direkt (Wert kommt rein — Testbarkeit).
-- Regex-Escaping Pflicht beim Token-Strip (`token.replace(/[.*+?^${}()|
-  [\]\\]/g, "\\$&")`).
-- `num(value)` als zentraler `Number()`-Wrapper — aber NICHT für
-  null/""/boolean: `Number(null)` & Co. sind 0, ohne den Guard würde ein
-  JSON-null als 0 % oder Reset „jetzt" erscheinen statt als „keine Angabe"
-  (NaN). `clamp(value, lo, hi)` für 0..1-Bounds.
-- Sortierreihenfolge NIE nach Füllstand (Liste würde bei jedem Refresh
-  springen). Provider alphabetisch (`a.name.localeCompare(b.name, "en")`),
-  Limits nach `durationMs` aufsteigend.
-- `accessLabel()` füllt den Zugangs-Slot der Kopfzeile mit **genau einer**
-  Angabe, immer im Format „Substantiv Wert": `planType` („Plan lite") →
-  `orgName` („Org …") → `projectId` („Projekt …") → `models` minus
-  `unavailableModels` („Modell(e) …"). Das Substantiv ist Pflicht, auch
-  beim Plan: ohne es standen in derselben Spalte ein nackter Planname und
-  eine beschriftete Angabe nebeneinander. `orgName` NUR ohne `planType` —
-  bei OpenAI Codex ist `orgName` gleich `free` (Dopplung), und bei
-  Consumer-Accounts steht dort der Name der Person, der als Plan gelesen
-  wie ein Tarif aussah („Anthropic · Ada Lovelace"). Es gibt KEIN `plan`-
-  und kein `scope`-Feld mehr: ein Slot, ein Feld (`provider.access`).
-- `STATUS_LABELS` spiegelt omps Vokabular (`ok`, `warning`, `exhausted`,
-  `unknown`); unbekannte Werte werden unverändert durchgereicht.
-- Phantom-Fenster ohne Kontingent (MiniMax' 7-Tage-Fenster, das omp aus
-  `current_weekly_remaining_percent: 100` ableitet — 20/20 Verlaufs-
-  Snapshots 0,0 %, während 5 h auf 35 % lief) werden jetzt im
-  Provider-Plugin unter `descriptor.unlimitedWindows` geführt, nicht in
-  `Usage.js`. `isUnlimited(plugin, entry, fraction)` greift nur bei
-  **exakt** 0 % UND wenn die Fenster-ID in `plugin.unlimitedWindows` steht
-  — echter Verbrauch macht die Zeile wieder zum Limit. Die Zeile wird
-  NICHT gelöscht: „Fenster fehlt" wirft die Frage auf, die „unbegrenzt"
-  beantwortet. `fraction: -1` blendet den Meter aus und verliert jeden
-  `worst`-Vergleich, `resetsAt: NaN` unterdrückt den Countdown — das
-  Wochenende ohne Limit ist kein Reset.
-- `amountText()` liefert den Absolutwert nur bei `unit !== "percent"` —
-  sonst wiederholt er den Prozentwert. `compact()` formatiert mit deutschem
-  Dezimalkomma (850 / 1,2k / 12k / 4,1M).
-- `plural(count, one, many)` für jede Zählangabe; ein hart singulares Label
-  ist bei zwei Einträgen falsch.
-- `failed(message)` erzeugt die vollständige Report-Feldform, damit das
-  Panel nie gegen fehlende Felder prüfen muss.
+- `.pragma library` first line, then `.import` lines. **No ES6**: only `var`
+  and `function` — the test loader collects exports via regex on exactly
+  these two top-level forms.
+- `Usage.js` is pure: no QML dependency, no `Date.now()` inside (time comes
+  in as a parameter — testability).
+- `num(value)` guards `null`/`""`/booleans to NaN — otherwise a JSON `null`
+  renders as 0 % or a reset "now" instead of "no data".
+- Quota truth ordering in `usedFraction()`: `usedFraction` →
+  `remainingFraction` (as `1 - r`) → `used/limit`.
+- `accessLabel()` fills the header slot with exactly one `"Noun Value"`
+  entry: `planType` ("Plan lite") → `orgName` ("Org …", only without a plan)
+  → `projectId` ("Projekt …") → `models` minus `unavailableModels`. The noun
+  is mandatory; `orgName` alone once posed as a plan ("Anthropic · Max
+  Mustermann").
+- Phantom windows: omp derives windows from fields that describe no quota at
+  all (MiniMax keeps `current_weekly_remaining_percent` at 100 for an
+  unlimited week; omp computes `(100-100)/100` = a permanent 0 % window —
+  20/20 history snapshots at 0.0 % while the 5 h window hit 35 %). Such
+  windows live in the provider plugin's `unlimitedWindows` and normalize to
+  `fraction: -1` (meter hidden, loses every `worst` comparison),
+  `percentText: "∞"`, `statusLabel: "unbegrenzt"`, `resetsAt: NaN` (the end
+  of a week without a limit is not a reset). Never delete the row — "window
+  missing" raises the question "unbegrenzt" answers. `isUnlimited()` fires
+  only at exactly 0 %: real usage turns the row back into a quota.
+- Sorting is never by fill level (the list would jump every refresh):
+  providers by `name.localeCompare(b.name, "en")`, limits by `durationMs`
+  ascending. The explicit locale is part of the contract.
+- Labels: regex-escape every stripped token (`Z.ai`), drop a lone
+  `quota|limit|usage`. User-facing numbers via `compact()` (German decimal
+  comma) and `plural(count, one, many)`.
+
+### Provider registry (`Providers.js`, `providers/`)
+
+- A plugin carries only what omp's report does not provide: display-name
+  spelling and phantom windows. `strip` is derived — `stripTokens(id, name)`
+  splits the ID on `[-_.]` plus the name on whitespace, dedupes
+  case-insensitively (omp's real labels almost never name the provider:
+  "Claude 5 Hour", "General 7 Day", "30 days"; hand-maintained lists were
+  dead in 6 of 7 entries).
+- `resolve(id)` ALWAYS returns a complete descriptor (`id`, `name`, `strip`,
+  `unlimitedWindows`); unknown IDs get `fallbackName()` titlecasing
+  (`some-new-provider` → "Some New Provider", empty → "Unbekannt") — the
+  fallback name never enters `strip`. The core never null-checks fields.
+- Adding a provider = create `providers/<Name>.js` + one `.import` and one
+  `PLUGINS` entry in `Providers.js` (imports alphabetical by filename). Both
+  are required; the registry consistency test catches a missing half.
+- Full procedure with acceptance steps: `.omp/skills/omp-quota-provider/SKILL.md`.
 
 ### Shell (`usage.sh`)
 
-- `set -o pipefail`.
-- Immer JSON auf stdout — auch im Fehlerfall
-  (`emit_error "{...}"`, exit 1). Auch dann, wenn die Ausgabe keine
-  geschweifte Klammer enthält und die Sed-Pipeline leer läuft.
-- `json_string()` escapet per Parameter-Expansion, NICHT per `sed`:
-  Zeilenumbrüche und ANSI-Escapes müssen raus, sonst entsteht kaputtes JSON.
-- `OMP_TIMEOUT=20` deckelt den usage-Aufruf (`timeout -k 2 20`), das
-  `--fresh`-invalidate ein eigenes 3-s-Budget; exit 124 und 137 (KILL-Phase)
-  werden als Timeout-Meldung gemeldet — inklusive des bereits eingelesenen
-  stderr-Details. Die Panel-Frist (25 s) liegt über dem Normalfall; nur wenn
-  BEIDE `--fresh`-Aufrufe TERM ignorieren, übernimmt der Watchdog.
-- stdout wird beim Einlesen auf 5 MB gekappt (`head -c 5000000`), stderr
-  auf 2 KB — sonst kann ein ausartender omp die JSON-Garantie per OOM
-  brechen. Mit `set -o pipefail` überlebt der Exit-Status des Normallaufs
-  die Pipeline.
-- omps stderr wird über eine `mktemp`-Datei eingefangen und in die
-  Fehlermeldung gehängt.
-- PATH-Suche in dieser Reihenfolge: `command -v omp`,
-  `~/.local/share/mise/shims/omp`, `~/.local/bin/omp`,
-  `~/.bun/bin/omp`, `/usr/local/bin/omp`, `/usr/bin/omp`, zuletzt
-  `mise which omp`.
-- Vorspann-Sed: `sed -n -E '/^[[:space:]]*\{(["}]|$)/,$p'` schneidet
-  Banner/Warnings vor dem JSON ab. Nach der `{` muss ein objektöffnendes
-  Zeichen folgen (`"`-Key, `}` oder Zeilenende) — sonst passierte ein
-  Text-Banner wie `{warn} ...` als angeblicher Payload.
+- `set -o pipefail`; invoked as `/bin/bash usage.sh` from QML (no exec-bit
+  dependency).
+- Always JSON on stdout, even on error; escape via bash parameter expansion
+  in `json_string()`, never `sed` (newlines/ANSI escapes break the object).
+- Preamble sed requires `{"`, `}` or EOL right after the `{`, so text
+  banners like `{warn} ...` don't pass as payload.
+- `OMP_TIMEOUT=20` (`timeout -k 2 20`), `--fresh` invalidate gets its own
+  3 s budget; exit 124 and 137 both report as timeout with captured stderr.
+  stdout capped at 5 MB, stderr at 2 KB.
+- PATH search order: `command -v omp`, mise shims, `~/.local/bin`,
+  `~/.bun/bin`, `/usr/local/bin`, `/usr/bin`, last `mise which omp`.
 
-### Manifest (`manifest.json`)
+### Never (each of these was a real bug)
 
-- `schemaVersion: 1`, `id` matched Verzeichnisname (`cabroe.omp-quota`).
-- `defaults` + `schema[]` MÜSSEN synchron sein (jeder Setting-Key in
-  beiden mit gleichem `defaultValue`, `min`/`max`/`step` wo relevant).
-- `barWidget.defaultSection: "right"`, `allowMultiple: false`.
+- Never use the inherited `setting()` helper, never guess a timer for
+  `settings` injection (reconcile via `requestRedact` instead).
+- Never drop a refresh request during a running fetch — queue it.
+- Never rely on `Process.onExited` for non-starting processes — evaluate
+  `onRunningChanged` + watchdog.
+- Never leave a hung process at SIGTERM only — the watchdog must also
+  `signal(9)`.
+- Never use a JS array as Repeater model for animated content.
+- Never move provider knowledge (names, strip tokens, window IDs) back into
+  `Usage.js`, never hand-maintain a strip list, never add a plugin that only
+  repeats the derivable name.
+- Never let `resolve()` return partial objects.
+- Never escape JSON with `sed`, never call `omp` without a timeout or
+  directly from QML.
+- Never sort by fill level.
 
 ## Important Files
 
-|Datei|Rolle|
+| File | Role |
 |---|---|
-|`manifest.json`|Plugin-Identität, Settings-Schema|
-|`Panel.qml`|UI, Lifecycle, IPC, Refresh-Logik, Error-Handling|
-|`Usage.js`|JSON → Render-Modell (providerfrei)|
-|`Providers.js`|Provider-Registry: `PLUGINS`, `BY_ID`, `resolve(id)`, `fallbackName(id)`|
-|`providers/`|Ein `descriptor` je Provider mit abweichender Schreibweise oder Quirk (siehe `skill://omp-quota-provider`)|
-|`usage.sh`|`omp`-Aufruf, PATH-Auflösung, Zeitlimit, JSON-Garantie|
-|`README.md`|Bedienung, Dev-Notizen, Tests, „Provider hinzufügen"|
-
-Entry-Point für die Bar ist ausschließlich `Panel.qml`. Es gibt keinen
-zusätzlichen Bootstrap-Code.
+| `Panel.qml` | Entry point: UI, lifecycle, IPC, refresh logic, error handling |
+| `Usage.js` | JSON → render model (provider-free) |
+| `Providers.js` | Registry: `PLUGINS`, `BY_ID`, `resolve(id)`, `fallbackName(id)`, `stripTokens(id, name)` |
+| `providers/*.js` | One `descriptor` per deviating provider (`id`, `name`, optional `unlimitedWindows`) |
+| `usage.sh` | omp invocation, PATH resolution, timeout, JSON guarantee |
+| `manifest.json` | Plugin identity + settings schema; `defaults` and `schema[]` MUST stay in sync (same keys, same `defaultValue`, `min`/`max`/`step` where relevant) |
+| `tests/load.js` | Loads QML `.pragma library` files for Bun |
+| `.omp/skills/omp-quota-provider/SKILL.md` | Provider-addition procedure incl. acceptance |
 
 ## Runtime/Tooling Preferences
 
-- **Runtime:** Quickshell (Qt/QML 6.x) innerhalb der Omarchy-Shell.
-- **Shell:** `bash` für `usage.sh` (keine POSIX-only-Konstrukte nötig,
-  aber `set -o pipefail` aktiv).
-- **Test-Tooling:** `bun test` (`bun:test`); kein Node/npm.
-- **Paketmanager:** keiner — kein `package.json`, keine `Cargo.toml`,
-  keine `pyproject.toml`.
-- **Tooling-Constraints:**
-  - Keine externen Abhängigkeiten außer `omp` (Binary auf PATH oder
-    installiert), coreutils (`timeout`, `mktemp`) und `mise`/`bun`.
-  - `omarchy restart shell` für jede Code-Änderung, sonst läuft die alte
-    Instanz weiter.
-  - `settings` wird vom Bar-Host injiziert — vor dem ersten Abruf noch
-    nicht vorhanden, siehe `requestRedact`.
+- **Runtime:** Quickshell (Qt/QML 6.x) inside the Omarchy shell.
+- **Shell:** bash for `usage.sh` (`set -o pipefail`; no POSIX-only constraint).
+- **Tests:** `bun test` (`bun:test`), Bun version pinned via `.bun-version`.
+- **No package manager, no dependencies:** no `package.json`/node_modules —
+  only `omp` (on PATH or installed), coreutils (`timeout`, `mktemp`) and
+  mise/bun. QML JS libraries are ES5 (`var`/`function` only).
+- `settings` is injected by the bar host — not present before the first
+  fetch (see `requestRedact`).
+- Project-local omp skill: `.omp/skills/omp-quota-provider/` (discovered as
+  `skill://omp-quota-provider`).
 
 ## Testing & QA
 
-- **Test-Framework:** `bun test` gegen `tests/`. `Usage.js` und
-  `Providers.js` sind `.pragma library`-Dateien mit `.import`-Ketten — sie
-  werden über `tests/load.js` geladen, das rekursiv jede `.import`-Zeile
-  auflöst und die exportierten `var`/`function`-Namen per Regex
-  (`/^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm`) einsammelt. `new Function`
-  allein reicht nicht: es parst die `.import`-Direktive nicht, und ohne
-  Auflösung scheitert `Providers.js` schon beim Laden.
-- **Registry-Konsistenztest:** prüft für jedes `providers/*.js`, dass (a)
-  die Datei einen Top-Level-`descriptor`-Export mit `id` und `name`
-  deklariert und `strip` NICHT selbst mitbringt (sonst wäre die Ableitung
-  umgangen), (b) `resolve(id)` daraus alle vier Felder vervollständigt,
-  (c) die `id` in `Providers.js` per `.import` referenziert und in
-  `PLUGINS` eingetragen ist, und (d) keine `id` in `PLUGINS` auf eine
-  fehlende Datei zeigt. Fängt „Datei angelegt, Import vergessen" (Provider
-  ist sonst still) und „Import eingetragen, Datei gelöscht" (Aggregation
-  wirft beim Laden).
-- **Fallback-Naming:** `fallbackName("some-new-provider")` →
-  `"Some New Provider"` (Trenner `[-_.]`, leere Segmente überspringen,
-  jedes Segment erstes Zeichen groß). Pin via Test, weil der Kern auf
-  vollständige Descriptoren vertraut und nichts nachprüft.
-- **`usage.sh` gegen Fake-omp:** in einem temporären PATH mit
-  isolierten `sed`/`mktemp`/`rm`/`timeout`-Symlinks, `mise`-Stub und
-  absolutem `/bin/bash`-Aufruf. Ohne diese Isolation findet `/usr/bin`
-  `mise` und damit über `mise which omp` das echte omp — der Test ruft
-  dann eine Provider-API.
-- **Smoke-Tests für AI-Agents / Maintainer:**
-  1. `./usage.sh` muss immer valides JSON auf stdout liefern (auch wenn
-     `omp` fehlt: `{"error": "omp nicht gefunden ..."}`).
-  2. `./usage.sh | head -c1` darf nicht leer sein und nicht mit einem
-     Warn-Banner beginnen.
-  3. `bun test` muss grün sein.
-  4. Nach `redact`-Toggle muss ein neuer Abruf redigierte Konten zeigen
-     (Präfix endet auf `*`); ein noch laufender Abruf mit der alten
-     Einstellung wird verworfen, nicht angezeigt.
-  5. Bei fehlendem `usage.sh` darf das Panel NICHT dauerhaft „wird geladen"
-     anzeigen — `failFetch()` muss kurz darauf die Fehlerkarte zeigen.
-  6. Ein hängendes `omp` darf das Widget nicht verklemmen: nach dem
-     Watchdog muss ein erneutes `r` einen neuen Prozess starten.
-- **Was kein Test ersetzt:** visueller Check nach `omarchy restart
-  shell` (Bar-Layout, Popup-Scrollen, Meter-Animation, Alarmfarbe ab
+- `bun test` from the repo root; CI (`.github/workflows/tests.yml`) runs it
+  on push/PR to `main` (ubuntu-latest, Bun from `.bun-version`, 5 min
+  timeout, per-ref concurrency cancel).
+- `tests/load.js`: `new Function` cannot parse the QML JS dialect, so the
+  loader strips `.pragma library` and resolves every `.import`
+  **recursively, relative to the importing file** (that was a real bug:
+  resolving against `tests/` first), collecting exports via
+  `/^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm`.
+- `tests/usage.test.js` pins the parse contract against real omp report
+  shapes; regression tests name their bugs (JSON primitives crashing
+  `parse`, `num(null)` becoming 0, missing `account` crashing
+  `collapseAccounts`).
+- `tests/providers.test.js`: `KNOWN` (with plugin) vs `DERIVED` (name falls
+  out of the ID); phantom-window exclusivity is deliberately narrow —
+  only `minimax-code` may carry `["7d"]`, a second entry is a behavior
+  change that must be conscious; registry consistency checks
+  `providers/*.js` ↔ `PLUGINS` in both directions, unique IDs, and that
+  plugins do NOT declare `strip`.
+- `tests/usage-sh.test.js`: fake-omp harness in a temp PATH with symlinked
+  coreutils (`sed`, `mktemp`, `rm`, `timeout`, …), a `mise` stub and an
+  absolute `/bin/bash` call. Isolation is mandatory: with `/usr/bin` in
+  PATH, `mise which omp` finds the real omp and the test hits a live
+  provider API.
+- `tests/manifest.test.js`: manifest invariants, especially
+  `defaults` ↔ `schema` lockstep.
+- Smoke tests for maintainers:
+  1. `./usage.sh` always prints valid JSON (missing omp → error object).
+  2. `./usage.sh | head -c1` is non-empty and not a warning banner.
+  3. `bun test` green.
+  4. Toggling `redact` refetches redacted accounts (prefix ends in `*`);
+     an in-flight fetch with the old setting is discarded, not shown.
+  5. Missing `usage.sh` must not leave the widget on "loading" forever —
+     `failFetch()` shows the error card.
+  6. A hung `omp` must not wedge the widget: after the watchdog, `r`
+     starts a new process.
+- No test replaces the visual check after `omarchy restart shell` (bar
+  layout, popup scrolling, meter animation, alarm color above
   `alarmThreshold`).
-
-## Gotchas (aus README, hier als AI-Anti-Pattern-Checkliste)
-
-- **Niemals** Providerwissen (Anzeigename, Strip-Token, Phantom-Fenster)
-  in `Usage.js` zurückholen — der Kern ist providerfrei. Alles, was pro
-  omp-Anbieter anders ist, gehört in `providers/<Name>.js` als
-  `descriptor`. Eine Wiederbelebung von Name-/Strip-/Phantom-Tabellen in
-  `Usage.js` wäre ein Rückschritt hinter den aktuellen Stand.
-- **Niemals** eine Provider-Datei anlegen ohne gleichzeitigen
-  `PLUGINS`-Eintrag in `Providers.js` — der Registry-Konsistenztest
-  schlägt fehl und die Datei bleibt stumm (kein `resolve()`-Treffer,
-  kein Render).
-- **Niemals** ein Plugin anlegen, das nur den ableitbaren Anzeigenamen
-  wiederholt (`anthropic`, `google-antigravity`), und **niemals** eine
-  Strip-Liste von Hand pflegen: `stripTokens(id, name)` leitet sie ab.
-  Die Handlisten waren zu sechs von sieben Einträgen tot, weil omps echte
-  Labels den Provider gar nicht nennen („Claude 5 Hour", „General 7 Day").
-  Ein Plugin rechtfertigt sich über abweichende Schreibweise oder einen
-  Quirk, den omps Daten nicht ausdrücken — sonst nicht.
-- **Niemals** ES6 in den JS-Libraries (`Usage.js`, `Providers.js`,
-  `providers/*.js`): kein `let`/`const`, keine Arrow-Functions, keine
-  Template-Strings, keine `class`, kein `Object.assign`, kein Spread.
-  QML-JS-Dialekt, nur `var` und `function` — der Test-Loader erkennt
-  Exporte per Regex auf genau diese zwei Formen und scheitert sonst
-  stillschweigend.
-- **Niemals** `resolve()` Teilobjekte liefern lassen — der Kern vertraut
-  auf vollständige Felder (`id`, `name`, `strip`, `unlimitedWindows`)
-  und prüft nichts nach. Unbekannte IDs gehen durch `fallbackName(id)`,
-  nicht durch ein teilweise gefülltes Descriptor-Objekt.
-- **Niemals** die geerbte `setting()`-Helper benutzen — Bindings bleiben
-  nicht reaktiv.
-- **Niemals** einen geratenen Timer für die `settings`-Injektion — das ist
-  ein Rennen gegen den Host. Stattdessen den Abruf korrigieren
-  (`requestRedact`).
-- **Niemals** eine Refresh-Anfrage verwerfen, weil gerade ein Abruf läuft —
-  merken und nachziehen.
-- **Niemals** annehmen, `Process.onExited` feuert für nicht-startende
-  Prozesse; stattdessen `onRunningChanged` auswerten + Watchdog.
-- **Niemals** einen hängenden Prozess nur abschreiben — der Watchdog MUSS
-  `running = false` setzen, sonst blockiert er jeden weiteren Abruf. Aber
-  AUCH das reicht allein nicht: Quickshell setzt `running = false` als
-  `QProcess::terminate()` um — SIGTERM an bash — und bash deferiert das,
-  solange ein Vordergrund-Kind läuft; `timeout` ohne `-k` wartet endlos auf
-  ein TERM-ignorierendes Kind. Der Watchdog setzt deshalb danach
-  `usageProcess.signal(9)`: SIGKILL an bash, die einzige Quelle der
-  stdout-Pipe — `finished` feuert garantiert, die Queue zieht nach.
-  `signal()` guardt selbst gegen einen bereits toten Prozess.
-- **Niemals** ein JS-Array als Repeater-Modell für animierte Inhalte —
-  Delegates werden zerstört und `Behavior` greift beim Initialwert nicht.
-- **Niemals** JSON per `sed` escapen — Zeilenumbrüche und ANSI-Escapes
-  erzeugen ungültige Objekte.
-- **Niemals** Sortierung nach Füllstand — Liste springt bei jedem
-  Refresh.
-- **Niemals** `omp`-Aufruf ohne PATH-Suche direkt aus QML.
-- **Niemals** `omp` ohne Zeitlimit aufrufen.
-- **Niemals** annehmen, dass Datei-Speichern das Widget neu lädt —
-  `omarchy restart shell` ist Pflicht.
