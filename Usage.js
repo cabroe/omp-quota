@@ -263,14 +263,16 @@ function planLabel(metadata) {
 // Ein Provider ohne `planType` ließe den Slot in der Kopfzeile leer — omp
 // meldet den Plan nur für Z.ai ("lite") und OpenAI Codex ("free"). Für die
 // übrigen steht hier, was omp über den Zugang tatsächlich weiß. Jede Angabe
-// trägt ihr Substantiv, weil ein nacktes "Carsten Bröckert" oder
-// "aicode-consumers" im Plan-Slot wie eine Planbezeichnung aussieht.
+// trägt ihr Substantiv, weil ein nackter Personen- oder Projektname im
+// Plan-Slot wie eine Planbezeichnung aussieht.
 //
 // Nur ein Wert, und nur ohne `planType`: bei OpenAI Codex ist `orgName`
-// gleich "free" und damit eine Dopplung des Plans.
+// gleich "free" und damit eine Dopplung des Plans. Die Prüfung läuft über
+// planLabel(), damit beide Funktionen dieselbe Vorstellung davon haben,
+// was als Plan zählt.
 function scopeLabel(metadata) {
   var meta = metadata || {};
-  if (String(meta.planType || "").trim().length > 0)
+  if (planLabel(meta).length > 0)
     return "";
 
   var org = String(meta.orgName || "").trim();
@@ -297,19 +299,16 @@ function availableModels(metadata) {
   var meta = metadata || {};
   var all = meta.models instanceof Array ? meta.models : [];
   var blocked = meta.unavailableModels instanceof Array ? meta.unavailableModels : [];
+  // Erst die Sperrliste normalisieren, dann einmal linear durchsuchen:
+  // sonst trimmt die innere Schleife dieselben Einträge pro Modell neu.
+  var denied = [];
+  for (var i = 0; i < blocked.length; i++)
+    denied.push(String(blocked[i] || "").trim());
+
   var out = [];
-  for (var i = 0; i < all.length; i++) {
-    var name = String(all[i] || "").trim();
-    if (name.length === 0)
-      continue;
-    var usable = true;
-    for (var j = 0; j < blocked.length; j++) {
-      if (String(blocked[j] || "").trim() === name) {
-        usable = false;
-        break;
-      }
-    }
-    if (usable)
+  for (var j = 0; j < all.length; j++) {
+    var name = String(all[j] || "").trim();
+    if (name.length > 0 && denied.indexOf(name) < 0)
       out.push(name);
   }
   return out;
@@ -410,7 +409,9 @@ function parse(raw) {
   if (typeof data.error === "string" && data.error.length > 0)
     return failed(data.error);
 
-  var reports = data && data.reports instanceof Array ? data.reports : [];
+  // Kein `data &&` mehr nötig: der Objektcheck oben hat null und Primitive
+  // bereits abgefangen.
+  var reports = data.reports instanceof Array ? data.reports : [];
   var providers = [];
   for (var i = 0; i < reports.length; i++) {
     var normalized = normalizeReport(reports[i] || {});

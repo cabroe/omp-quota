@@ -138,8 +138,17 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
   weil `WidgetButton` `tooltipText` nur bei `onEntered` liest und der
   Tooltip dort die Alterung des Abrufs nennt. NICHT über ein Signal auf
   `tooltipHovered` lösen — das hinge an einer Qt-internen Signalreihenfolge.
-- Eigenständige `component LimitRow: Column { … }` am Dateiende für die
-  Zeile (Titel + Status/Absolutwert + Reset + Prozent + Meter).
+- Wiederverwendbare Blöcke als eigenständige `component`s am Dateiende:
+  `ProviderSection: Column { … }` für einen Provider-Abschnitt (Trennlinie
+  + Kopfzeile + Limit-Repeater) und `LimitRow: Column { … }` für die Zeile
+  (Titel + Status/Absolutwert + Reset + Prozent + Meter). Der Popup-Baum
+  bleibt dadurch flach genug, um ihn am Stück zu lesen.
+- Geschwister NIE über `parent.children[N]` adressieren — ein neues Element
+  davor verschiebt den Index und bricht das Layout still. `id` vergeben
+  (`providerTitle`, `providerMeta`).
+- Mehrfach gebrauchte Layout-Terme einmal benennen (`titleRow.tailWidth`):
+  Titelbreite und Spacer müssen exakt denselben Wert abziehen, sonst
+  driften sie beim nächsten Eingriff auseinander.
 - Lange Properties: `borderSpec`, `anchors.baseline` für Detail/Reset/
   Prozent auf Titel-Baseline.
 - `Behavior on width { NumberAnimation { duration: 160; easing.type:

@@ -447,90 +447,10 @@ Panel {
           Repeater {
             model: root.providerCount
 
-            delegate: Column {
-              id: providerBlock
+            delegate: ProviderSection {
               required property int index
-
-              readonly property var provider: root.providerAt(providerBlock.index)
-              readonly property int limitCount: provider && provider.limits instanceof Array ? provider.limits.length : 0
-
-              function limitAt(position) {
-                var list = providerBlock.provider ? providerBlock.provider.limits : null
-                return list instanceof Array && position >= 0 && position < list.length ? list[position] : null
-              }
-
               width: content.width
-              spacing: Style.space(8)
-              // Während eines Abrufs, der Provider entfernt, kann der Index
-              // kurz ins Leere zeigen.
-              visible: providerBlock.provider !== null
-
-              PanelSeparator {
-                foreground: root.foreground
-              }
-
-              Row {
-                width: parent.width
-
-                PanelSectionHeader {
-                  text: providerBlock.provider ? providerBlock.provider.name : ""
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                }
-
-                Item {
-                  // providerMeta.width statt implicitWidth: der Text ist
-                  // auf 60 % der Breite gedeckelt und elidiert — der Spacer
-                  // muss mit der gezeichneten, nicht der vollen Breite
-                  // rechnen, sonst klebt der Meta-Text nicht an der rechten
-                  // Kante. parent.width ist vom Popup gesetzt, daher keine
-                  // Bindingschleife.
-                  width: Math.max(0, parent.width - parent.children[0].implicitWidth - providerMeta.width)
-                  height: 1
-                }
-
-                PanelSectionHeader {
-                  id: providerMeta
-                  text: {
-                    var provider = providerBlock.provider
-                    if (!provider)
-                      return ""
-                    var parts = []
-                    if (String(provider.plan || "") !== "")
-                      parts.push(provider.plan)
-                    // Provider ohne Plan: die Angabe, die omp für ihn
-                    // wirklich führt (Organisation, Projekt, Modellklassen).
-                    else if (String(provider.scope || "") !== "")
-                      parts.push(provider.scope)
-                    // Leer, solange alle Provider dasselbe Konto melden —
-                    // das steht dann einmal in der Fußzeile.
-                    if (String(provider.account || "") !== "")
-                      parts.push(provider.account)
-                    // Prepaid-Guthaben, mit dem sich ein gesperrtes Fenster
-                    // vorzeitig zurücksetzen lässt.
-                    if (Number(provider.resetCredits) >= 0)
-                      parts.push(Usage.plural(provider.resetCredits, "Reset-Credit", "Reset-Credits"))
-                    return parts.join(" · ")
-                  }
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  font.bold: false
-                  opacity: 0.75
-                  elide: Text.ElideRight
-                  // Der Providername hat Vorrang, wenn der Platz knapp wird.
-                  width: Math.min(implicitWidth, parent.width * 0.6)
-                }
-              }
-
-              Repeater {
-                model: providerBlock.limitCount
-
-                delegate: LimitRow {
-                  required property int index
-                  width: providerBlock.width
-                  limit: providerBlock.limitAt(index)
-                }
-              }
+              provider: root.providerAt(index)
             }
           }
 
@@ -586,6 +506,93 @@ Panel {
     }
   }
 
+  // Ein Provider-Abschnitt: Trennlinie, Kopfzeile (Name links, Plan bzw.
+  // Zugangsangabe, Konto und Reset-Credits rechts) und je Kontingent eine
+  // LimitRow.
+  component ProviderSection: Column {
+    id: providerBlock
+    property var provider: null
+
+    readonly property int limitCount: provider && provider.limits instanceof Array ? provider.limits.length : 0
+
+    function limitAt(position) {
+      var list = providerBlock.provider ? providerBlock.provider.limits : null
+      return list instanceof Array && position >= 0 && position < list.length ? list[position] : null
+    }
+
+    spacing: Style.space(8)
+    // Während eines Abrufs, der Provider entfernt, kann der Index kurz ins
+    // Leere zeigen.
+    visible: providerBlock.provider !== null
+
+    PanelSeparator {
+      foreground: root.foreground
+    }
+
+    Row {
+      width: parent.width
+
+      PanelSectionHeader {
+        id: providerTitle
+        text: providerBlock.provider ? providerBlock.provider.name : ""
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      Item {
+        // providerMeta.width statt implicitWidth: der Text ist auf 60 % der
+        // Breite gedeckelt und elidiert — der Spacer muss mit der
+        // gezeichneten, nicht der vollen Breite rechnen, sonst klebt der
+        // Meta-Text nicht an der rechten Kante. parent.width ist vom Popup
+        // gesetzt, daher keine Bindingschleife.
+        width: Math.max(0, parent.width - providerTitle.implicitWidth - providerMeta.width)
+        height: 1
+      }
+
+      PanelSectionHeader {
+        id: providerMeta
+        text: {
+          var provider = providerBlock.provider
+          if (!provider)
+            return ""
+          var parts = []
+          if (String(provider.plan || "") !== "")
+            parts.push(provider.plan)
+          // Provider ohne Plan: die Angabe, die omp für ihn wirklich führt
+          // (Organisation, Projekt, Modellklassen).
+          else if (String(provider.scope || "") !== "")
+            parts.push(provider.scope)
+          // Leer, solange alle Provider dasselbe Konto melden — das steht
+          // dann einmal in der Fußzeile.
+          if (String(provider.account || "") !== "")
+            parts.push(provider.account)
+          // Prepaid-Guthaben, mit dem sich ein gesperrtes Fenster vorzeitig
+          // zurücksetzen lässt.
+          if (Number(provider.resetCredits) >= 0)
+            parts.push(Usage.plural(provider.resetCredits, "Reset-Credit", "Reset-Credits"))
+          return parts.join(" · ")
+        }
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        font.bold: false
+        opacity: 0.75
+        elide: Text.ElideRight
+        // Der Providername hat Vorrang, wenn der Platz knapp wird.
+        width: Math.min(implicitWidth, parent.width * 0.6)
+      }
+    }
+
+    Repeater {
+      model: providerBlock.limitCount
+
+      delegate: LimitRow {
+        required property int index
+        width: providerBlock.width
+        limit: providerBlock.limitAt(index)
+      }
+    }
+  }
+
   // Eine Kontingentzeile: Titel, Status und Absolutwert, Reset-Countdown,
   // Prozent, Meter. Der Meter zeigt den Verbrauch, füllt also in Richtung
   // Limit.
@@ -616,7 +623,14 @@ Panel {
     spacing: Style.space(5)
 
     Row {
+      id: titleRow
       width: parent.width
+
+      // Was rechts stehen bleibt: Detail, Reset und Prozent behalten ihren
+      // Platz, der Titel weicht. Einmal benannt statt zweimal ausgeschrieben
+      // — Titelbreite und Spacer müssen exakt denselben Wert abziehen,
+      // sonst driften sie bei jeder Änderung auseinander.
+      readonly property real tailWidth: limitDetail.implicitWidth + limitReset.implicitWidth + limitPercent.implicitWidth
 
       Text {
         id: limitTitle
@@ -626,13 +640,12 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight
-        // Prozent, Reset und Detail behalten ihren Platz; ein langer
-        // Fenstername weicht zuerst.
-        width: Math.min(implicitWidth, Math.max(0, parent.width - limitDetail.implicitWidth - limitReset.implicitWidth - limitPercent.implicitWidth - Style.space(12)))
+        // Ein langer Fenstername weicht zuerst.
+        width: Math.min(implicitWidth, Math.max(0, parent.width - titleRow.tailWidth - Style.space(12)))
       }
 
       Item {
-        width: Math.max(0, parent.width - limitTitle.width - limitDetail.implicitWidth - limitReset.implicitWidth - limitPercent.implicitWidth)
+        width: Math.max(0, parent.width - limitTitle.width - titleRow.tailWidth)
         height: 1
       }
 

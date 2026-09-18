@@ -298,9 +298,9 @@ describe("compact / decimal / plural", () => {
 describe("planLabel / accountLabel", () => {
   test("nur planType ist eine Planangabe, orgName wird ignoriert", () => {
     expect(usage.planLabel({ planType: "pro", orgName: "acme" })).toBe("pro");
-    // Genau der Regressionfall vom Plugin-Agenten: Anthropic liefert kein
-    // planType, dadurch stand der Personenname als Plan im Panel.
-    expect(usage.planLabel({ orgName: "Carsten Broeckert" })).toBe("");
+    // Regressionsfall: Anthropic liefert kein planType, dadurch stand der
+    // Name des Kontoinhabers als Plan im Panel.
+    expect(usage.planLabel({ orgName: "Ada Lovelace" })).toBe("");
     expect(usage.planLabel({ orgName: "acme" })).toBe("");
     expect(usage.planLabel({})).toBe("");
   });
@@ -311,12 +311,12 @@ describe("planLabel / accountLabel", () => {
   test("ohne planType tritt die Angabe ein, die der Provider wirklich führt", () => {
     // anthropic
     expect(
-      usage.scopeLabel({ email: "a@example.com", orgName: "Carsten Broeckert" }),
-    ).toBe("Org Carsten Broeckert");
+      usage.scopeLabel({ email: "a@example.com", orgName: "Ada Lovelace" }),
+    ).toBe("Org Ada Lovelace");
     // google-antigravity
     expect(
-      usage.scopeLabel({ email: "a@example.com", projectId: "aicode-consumers" }),
-    ).toBe("Projekt aicode-consumers");
+      usage.scopeLabel({ email: "a@example.com", projectId: "example-project" }),
+    ).toBe("Projekt example-project");
     // minimax-code: `video` ist gemeldet, aber nicht nutzbar
     expect(
       usage.scopeLabel({

@@ -1,40 +1,41 @@
 #!/bin/bash
 
-# Print the omp provider-usage report as JSON on stdout, always.
+# Gibt den omp-Provider-Nutzungsreport als JSON auf stdout aus — immer.
 #
-# The shell runs with Hyprland's PATH, which is not a login shell's PATH: omp
-# is usually a mise shim, sometimes a plain binary in ~/.local/bin. Resolving
-# it here — rather than trusting `command -v` inside a QML Process — keeps the
-# plugin working no matter how the session was started.
+# Die Shell läuft mit Hyprlands PATH, nicht mit dem einer Login-Shell: omp
+# ist meist ein mise-Shim, manchmal ein einfaches Binary in ~/.local/bin.
+# Die Auflösung hier — statt `command -v` innerhalb eines QML-Process —
+# hält das Plugin funktionsfähig, egal wie die Sitzung gestartet wurde.
 #
-# stdout is always a JSON object so the panel never has to distinguish "no
-# output" from "broken output". Failures print {"error": "..."} and exit 1,
-# and the message carries omp's own stderr: "exit 1" on its own never told
-# anyone whether a token had expired or DNS was down.
+# stdout ist immer ein JSON-Objekt, damit das Panel „keine Ausgabe" nie von
+# „kaputte Ausgabe" unterscheiden muss. Fehler geben {"error": "..."} aus
+# und beenden mit 1; die Meldung trägt omps eigenes stderr, denn „exit 1"
+# allein hat nie verraten, ob ein Token abgelaufen oder DNS tot war.
 
 set -o pipefail
 
-# Wall-clock ceiling for one omp call. Measured on this machine: 0.3 s from
-# omp's cache, 1.2 s with --fresh (every provider API re-queried). The panel's
-# watchdog sits above this number, so the script normally gives up first and
-# reports its own precise error. -k 2 gives a TERM-ignoring omp 2 s of grace
-# before KILL — without it, timeout waits forever on exactly the hang class
-# this ceiling exists for.
+# Wanduhr-Obergrenze für einen omp-Aufruf. Gemessen: 0,3 s aus omps Cache,
+# 1,2 s mit --fresh (jede Provider-API neu befragt). Der Watchdog des Panels
+# liegt über diesem Wert, das Skript gibt also im Normalfall zuerst auf und
+# meldet seinen eigenen, genaueren Fehler. -k 2 gibt einem TERM-ignorierenden
+# omp 2 s Gnade vor dem KILL — ohne das wartet timeout endlos auf genau die
+# Hänger-Klasse, für die diese Obergrenze existiert.
 OMP_TIMEOUT=20
-# --fresh runs two omp calls back to back, so the budgets add up. The
-# invalidate drop gets its own short ceiling; failure stays non-fatal (a
-# stale snapshot beats no snapshot). Only when BOTH calls ignore TERM does
-# the combined worst case (5 s + 22 s) cross the panel's 25 s watchdog —
-# and the QML side SIGKILLs as the last resort.
+# --fresh führt zwei omp-Aufrufe hintereinander aus, die Budgets addieren
+# sich also. Das Verwerfen des Caches bekommt seine eigene kurze Grenze;
+# ein Fehlschlag bleibt unkritisch (ein alter Snapshot schlägt keinen).
+# Nur wenn BEIDE Aufrufe TERM ignorieren, überschreitet der kombinierte
+# Worst Case (5 s + 22 s) den 25-s-Watchdog des Panels — und die QML-Seite
+# schickt als letztes Mittel ein SIGKILL.
 FRESH_INVALIDATE_TIMEOUT=3
 
 errfile=""
 trap '[[ -n $errfile ]] && rm -f "$errfile"' EXIT
 
-# A JSON string literal, built with parameter expansion instead of sed. The
-# previous sed pipeline escaped quotes and backslashes but passed newlines and
-# terminal escapes through untouched, so any multi-line message produced two
-# broken lines instead of one object.
+# Ein JSON-String-Literal, gebaut per Parameter-Expansion statt per sed. Die
+# frühere sed-Pipeline escapte Anführungszeichen und Backslashes, ließ aber
+# Zeilenumbrüche und Terminal-Escapes unberührt — jede mehrzeilige Meldung
+# erzeugte so zwei kaputte Zeilen statt eines Objekts.
 json_string() {
   local s=${1:0:400}
   s=${s//\\/\\\\}
@@ -102,8 +103,9 @@ OMP=$(find_omp) || {
   exit 1
 }
 
-# coreutils is a hard dependency of the distro, so `timeout` is effectively
-# always there; reporting unbounded still beats refusing to report at all.
+# coreutils ist eine harte Abhängigkeit der Distribution, `timeout` ist also
+# praktisch immer da; ohne Zeitlimit zu melden schlägt immer noch, gar nicht
+# zu melden.
 TIMEOUT=$(command -v timeout 2>/dev/null)
 
 run_omp() {
@@ -118,9 +120,9 @@ run_omp() {
 
 errfile=$(mktemp 2>/dev/null) || errfile=""
 
-# A forced refresh drops omp's cached reports first; the provider APIs are then
-# re-queried by the usage call below. Failure here is not fatal — a stale
-# snapshot beats no snapshot.
+# Ein erzwungener Refresh verwirft zuerst omps gecachte Reports; die
+# Provider-APIs werden dann vom usage-Aufruf unten neu befragt. Ein
+# Fehlschlag hier ist unkritisch — ein alter Snapshot schlägt keinen.
 if ((fresh)); then
   run_omp "$FRESH_INVALIDATE_TIMEOUT" usage invalidate >/dev/null 2>&1
 fi
@@ -131,7 +133,7 @@ args=(usage --json)
 # stdout bekommt denselben OOM-Schutz wie stderr: Ein ausartender oder
 # kompromittierter omp kann Gigabytes schreiben; head deckelt die Variable
 # auf 5 MB. Mit pipefail überlebt der Exit-Status des normalen Laufs
-# (< 5 MB, head liest bis EOF), nur der.pathologische Lauf wird zum Fehler.
+# (< 5 MB, head liest bis EOF), nur der pathologische Lauf wird zum Fehler.
 if [[ -n $errfile ]]; then
   report=$(run_omp "$OMP_TIMEOUT" "${args[@]}" 2>"$errfile" | head -c 5000000)
 else
@@ -169,8 +171,9 @@ if ((status != 0)) || [[ -z $report ]]; then
   exit 1
 fi
 
-# Guard against omp printing a banner or warning ahead of the payload: keep
-# everything from the first brace on, so a stray line cannot break JSON.parse.
+# Schutz davor, dass omp ein Banner oder eine Warnung vor die Nutzlast
+# schreibt: alles ab der ersten geschweiften Klammer behalten, damit eine
+# verirrte Zeile JSON.parse nicht zerbricht.
 # Der Range verlangt nach der `{` ein Zeichen, das ein Objekt eröffnet —
 # ein Key-Anführungszeichen, die sofort schließende Klammer oder das
 # Zeilenende bei Pretty-Print. Sonst passierte auch ein Text-Banner wie
@@ -184,9 +187,9 @@ fi
 # fragiler sed-Parser beheben sollte.
 payload=$(printf '%s' "$report" | sed -n -E '/^[[:space:]]*\{(["}]|$)/,$p')
 
-# Output without a brace anywhere was never a report, and the sed above cuts
-# it down to nothing. Printing that empty result would break the single
-# promise this script makes: stdout is a JSON object.
+# Eine Ausgabe ganz ohne geschweifte Klammer war nie ein Report, und das sed
+# oben schneidet sie auf nichts zusammen. Dieses leere Ergebnis auszugeben
+# bräche das einzige Versprechen dieses Skripts: stdout ist ein JSON-Objekt.
 if [[ -z ${payload//[[:space:]]/} ]]; then
   emit_error "omp usage --json lieferte kein JSON-Objekt: $report"
   exit 1
