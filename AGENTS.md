@@ -162,6 +162,14 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
 - `planLabel()` liefert ausschließlich `planType`. Kein `orgName`-Fallback:
   Anthropic liefert kein `planType`, damit stand dort der Name der Person
   als „Plan".
+- `scopeLabel()` füllt den Plan-Slot der Provider, für die omp kein
+  `planType` hat (Anthropic, Google Antigravity, MiniMax Code): `orgName` →
+  `projectId` → `models` minus `unavailableModels`, jeweils mit Substantiv
+  davor („Org …", „Projekt …", „Modell(e) …"). Liegt `planType` vor, gibt es
+  leer zurück — sonst stünde bei OpenAI Codex `free · Org free`. Das
+  Substantiv ist Pflicht: ohne es wäre es genau der `orgName`-als-Plan-Bug,
+  den `planLabel()` verhindert. `Panel.qml` zeigt `plan` **oder** `scope`,
+  nie beides.
 - `STATUS_LABELS` spiegelt omps Vokabular (`ok`, `warning`, `exhausted`,
   `unknown`); unbekannte Werte werden unverändert durchgereicht.
 - `amountText()` liefert den Absolutwert nur bei `unit !== "percent"` —

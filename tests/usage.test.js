@@ -11,6 +11,7 @@ const USAGE_NAMES = [
   "limitTitle",
   "dedupe",
   "planLabel",
+  "scopeLabel",
   "accountLabel",
   "amountText",
   "statusLabel",
@@ -244,6 +245,45 @@ describe("planLabel / accountLabel", () => {
     expect(usage.planLabel({ orgName: "Carsten Broeckert" })).toBe("");
     expect(usage.planLabel({ orgName: "acme" })).toBe("");
     expect(usage.planLabel({})).toBe("");
+  });
+
+  // Die Metadaten unten sind die echten Felder aus `omp usage --json`:
+  // planType liefert nur zai/openai-codex, die übrigen drei Provider gar
+  // keinen Plan. Ohne scopeLabel blieb deren Kopfzeilen-Slot leer.
+  test("ohne planType tritt die Angabe ein, die der Provider wirklich führt", () => {
+    // anthropic
+    expect(
+      usage.scopeLabel({ email: "a@example.com", orgName: "Carsten Broeckert" }),
+    ).toBe("Org Carsten Broeckert");
+    // google-antigravity
+    expect(
+      usage.scopeLabel({ email: "a@example.com", projectId: "aicode-consumers" }),
+    ).toBe("Projekt aicode-consumers");
+    // minimax-code: `video` ist gemeldet, aber nicht nutzbar
+    expect(
+      usage.scopeLabel({
+        source: "minimax-token-plan",
+        models: ["general", "video"],
+        unavailableModels: ["video"],
+      }),
+    ).toBe("Modell general");
+    expect(usage.scopeLabel({ models: ["general", "video"] })).toBe(
+      "Modelle general, video",
+    );
+  });
+
+  test("mit planType bleibt scopeLabel leer statt den Plan zu doppeln", () => {
+    // openai-codex meldet orgName "free" — gleich dem planType.
+    expect(usage.scopeLabel({ planType: "free", orgName: "free" })).toBe("");
+    expect(usage.scopeLabel({ planType: "lite" })).toBe("");
+  });
+
+  test("orgName schlägt projectId, keine Angabe bleibt leer", () => {
+    expect(usage.scopeLabel({ orgName: "acme", projectId: "p1" })).toBe("Org acme");
+    expect(usage.scopeLabel({ email: "a@example.com" })).toBe("");
+    expect(usage.scopeLabel({})).toBe("");
+    // Alle Modelle blockiert: keine Auskunft ist besser als "Modelle ".
+    expect(usage.scopeLabel({ models: ["video"], unavailableModels: ["video"] })).toBe("");
   });
 
   test("E-Mail schlägt accountId, accountId wird auf 8 Zeichen gekürzt", () => {

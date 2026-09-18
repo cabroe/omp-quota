@@ -254,6 +254,61 @@ function planLabel(metadata) {
   return String((metadata || {}).planType || "").trim();
 }
 
+// Ein Provider ohne `planType` ließe den Slot in der Kopfzeile leer — omp
+// meldet den Plan nur für Z.ai ("lite") und OpenAI Codex ("free"). Für die
+// übrigen steht hier, was omp über den Zugang tatsächlich weiß. Jede Angabe
+// trägt ihr Substantiv, weil ein nacktes "Carsten Bröckert" oder
+// "aicode-consumers" im Plan-Slot wie eine Planbezeichnung aussieht.
+//
+// Nur ein Wert, und nur ohne `planType`: bei OpenAI Codex ist `orgName`
+// gleich "free" und damit eine Dopplung des Plans.
+function scopeLabel(metadata) {
+  var meta = metadata || {};
+  if (String(meta.planType || "").trim().length > 0)
+    return "";
+
+  var org = String(meta.orgName || "").trim();
+  if (org.length > 0)
+    return "Org " + org;
+
+  // Google Antigravity identifiziert den Zugang über das Cloud-Projekt.
+  var project = String(meta.projectId || "").trim();
+  if (project.length > 0)
+    return "Projekt " + project;
+
+  // MiniMax meldet weder Plan noch Konto, dafür die freigeschalteten
+  // Modellklassen — und in `unavailableModels`, welche davon gerade nicht
+  // nutzbar sind. Was übrig bleibt, ist die eigentliche Auskunft.
+  var models = availableModels(meta);
+  if (models.length > 0)
+    return (models.length === 1 ? "Modell " : "Modelle ") + models.join(", ");
+
+  return "";
+}
+
+// `models` minus `unavailableModels`, Reihenfolge wie gemeldet.
+function availableModels(metadata) {
+  var meta = metadata || {};
+  var all = meta.models instanceof Array ? meta.models : [];
+  var blocked = meta.unavailableModels instanceof Array ? meta.unavailableModels : [];
+  var out = [];
+  for (var i = 0; i < all.length; i++) {
+    var name = String(all[i] || "").trim();
+    if (name.length === 0)
+      continue;
+    var usable = true;
+    for (var j = 0; j < blocked.length; j++) {
+      if (String(blocked[j] || "").trim() === name) {
+        usable = false;
+        break;
+      }
+    }
+    if (usable)
+      out.push(name);
+  }
+  return out;
+}
+
 function accountLabel(metadata) {
   var meta = metadata || {};
   var email = String(meta.email || "").trim();
@@ -286,6 +341,7 @@ function normalizeReport(report) {
     id: id,
     name: providerName(id),
     plan: planLabel(report.metadata),
+    scope: scopeLabel(report.metadata),
     account: accountLabel(report.metadata),
     fetchedAt: num(report.fetchedAt),
     limits: limits,

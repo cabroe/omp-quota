@@ -480,6 +480,10 @@ Panel {
                     var parts = []
                     if (String(provider.plan || "") !== "")
                       parts.push(provider.plan)
+                    // Provider ohne Plan: die Angabe, die omp für ihn
+                    // wirklich führt (Organisation, Projekt, Modellklassen).
+                    else if (String(provider.scope || "") !== "")
+                      parts.push(provider.scope)
                     // Leer, solange alle Provider dasselbe Konto melden —
                     // das steht dann einmal in der Fußzeile.
                     if (String(provider.account || "") !== "")

@@ -91,6 +91,16 @@ Meter.
   in Anfragen, dort steht `1/100 Anfragen` neben dem „1 %".
 - **Reset-Credits.** Prepaid-Guthaben, mit dem sich ein gesperrtes Fenster
   vorzeitig zurücksetzen lässt, steht in der Provider-Überschrift.
+- **Plan.** omp meldet `metadata.planType` nur für Z.ai (`lite`) und OpenAI
+  Codex (`free`). Für Anthropic, Google Antigravity und MiniMax Code gibt es
+  keinen Plan — weder im Report noch in omps Credential-Store, und `omp
+  usage` selbst zeigt dort ebenfalls kein `plan:`. Damit der Slot nicht leer
+  bleibt, tritt die Angabe ein, die der Provider wirklich führt: `Org
+  Carsten Bröckert` (Anthropic `orgName`), `Projekt aicode-consumers`
+  (Antigravity `projectId`), `Modell general` (MiniMax `models` minus
+  `unavailableModels`). Jede trägt ihr Substantiv, weil ein nackter
+  Personenname im Plan-Slot wie eine Planbezeichnung aussieht — genau der
+  Fehler, den `planLabel()` vermeidet.
 - **Fußzeile.** Stand des Abrufs, geteiltes Konto, deaktivierte Zugänge,
   Konten ohne Daten, Tastenkürzel.
 
