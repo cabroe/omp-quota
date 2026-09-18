@@ -1,18 +1,20 @@
-// Tests für Usage.js (Parse-Vertrag). Usage.js ist eine QML-`.pragma library`
-// ohne ES-Exports — der Loader hier wrapt den Quelltext wie das README-Snippet,
-// gibt aber alle getesteten Funktionen zurück, nicht nur parse().
+// Tests für Usage.js (Parse-Vertrag). Usage.js ist eine QML-`.pragma
+// library` ohne ES-Exports — der Loader in `tests/load.js` löst die
+// `.import`-Direktive auf und reicht die Top-Level-Bindings als Objekt
+// zurück. Providerwissen liegt ausschließlich in `providers/*.js` und
+// wird über `Providers.js` aggregiert; dieses Test-File bezieht echte
+// Descriptors per `providers.resolve(id)`, statt handgeschriebene
+// Attrappen zu füttern.
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { load } from "./load.js";
 
-const USAGE_NAMES = [
+const usage = load("../Usage.js", [
   "parse",
   "num",
-  "providerName",
   "usedFraction",
   "limitTitle",
   "dedupe",
-  "planLabel",
-  "scopeLabel",
+  "accessLabel",
   "accountLabel",
   "amountText",
   "statusLabel",
@@ -22,14 +24,18 @@ const USAGE_NAMES = [
   "collapseAccounts",
   "untilText",
   "agoText",
-];
+]);
 
-const usage = new Function(
-  readFileSync(new URL("../Usage.js", import.meta.url), "utf8").replace(
-    /^\.pragma\s+library\s*$/m,
-    "",
-  ) + `\nreturn {${USAGE_NAMES.join(",")}};`,
-)();
+const providers = load("../Providers.js", ["resolve"]);
+
+// Neutraler Descriptor für generische Tests, die mit keinem konkreten
+// Providerverhalten zu tun haben (Dedupe-Logik, Formatierung).
+const NEUTRAL = providers.resolve("");
+
+// Echte Descriptors dort, wo das Providerverhalten geprüft wird.
+const ZAI = providers.resolve("zai");
+const MINIMAX = providers.resolve("minimax-code");
+const ANTHROPIC = providers.resolve("anthropic");
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -117,14 +123,14 @@ describe("dedupe", () => {
         rawLimit({ ...group, amount: { usedFraction: 0.3 } }),
         rawLimit({ amount: { usedFraction: 0.1 } }),
       ],
-      [],
+      NEUTRAL,
     );
     expect(out).toHaveLength(2);
     expect(out.filter((l) => l.fraction === 0.7)).toHaveLength(1);
   });
 
   test("ohne sharedGroup bleibt jedes Limit eigenständig", () => {
-    expect(usage.dedupe([rawLimit(), rawLimit()], [])).toHaveLength(2);
+    expect(usage.dedupe([rawLimit(), rawLimit()], NEUTRAL)).toHaveLength(2);
   });
 
   // Ein solo-Limit zwischen zwei Gruppentreffern darf den gespeicherten
@@ -137,7 +143,7 @@ describe("dedupe", () => {
         rawLimit({ id: "solo", amount: { usedFraction: 0.5 } }),
         rawLimit({ id: "g1b", amount: { usedFraction: 0.9 }, scope: { sharedGroup: "g1" } }),
       ],
-      [],
+      NEUTRAL,
     );
     expect(out).toHaveLength(2);
     expect(out[0].id).toBe("g1b");
@@ -154,7 +160,7 @@ describe("dedupe", () => {
         rawLimit({ id: "w", window: { label: "Weekly", durationMs: DAY, resetsAt: 5000 }, scope: { sharedGroup: "g" } }),
         rawLimit({ id: "h", amount: { usedFraction: 0.9 }, window: { label: "5 Hour", durationMs: HOUR, resetsAt: 6000 }, scope: { sharedGroup: "g" } }),
       ],
-      [],
+      NEUTRAL,
     );
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe("h");
@@ -163,43 +169,29 @@ describe("dedupe", () => {
 });
 
 describe("limitTitle / Label-Strip", () => {
+  // Strip-Tokens stammen aus dem echten Z.ai-Descriptor; ändert jemand
+  // dort die Liste, fällt der Test sofort.
   test("Provider- und Fenstertoken werden entfernt", () => {
-    expect(usage.limitTitle("ZAI 5 Hours Token Quota", "5 Hours", ["ZAI", "Z.ai"])).toBe(
+    expect(usage.limitTitle("ZAI 5 Hours Token Quota", "5 Hours", ZAI.strip)).toBe(
       "Token Quota · 5 Hours",
     );
   });
 
   test("Label, das nur das Fenster wiederholt, fällt aufs Fenster zurück", () => {
-    expect(usage.limitTitle("5 Hours", "5 Hours", ["ZAI"])).toBe("5 Hours");
+    expect(usage.limitTitle("5 Hours", "5 Hours", ZAI.strip)).toBe("5 Hours");
   });
 
   test("Regex-Sonderzeichen im Token werden escaped", () => {
     // "C++" wäre als Regex ein SyntaxError; escaped wird es als Wort gestrippt
-    expect(usage.limitTitle("Z.ai C++ Pro Quota", "C++", ["Z.ai"])).toBe("Pro Quota · C++");
+    expect(usage.limitTitle("Z.ai C++ Pro Quota", "C++", ZAI.strip)).toBe("Pro Quota · C++");
   });
 
   test("Fenster-Token werden mitgestrippt; bloßes 'Quota' trägt nichts", () => {
-    expect(usage.limitTitle("Z.ai Pro Quota", "Pro", ["Z.ai"])).toBe("Pro");
+    expect(usage.limitTitle("Z.ai Pro Quota", "Pro", ZAI.strip)).toBe("Pro");
   });
 
   test("leeres Label", () => {
     expect(usage.limitTitle("", "5 Hours", [])).toBe("5 Hours");
-  });
-});
-
-describe("providerName", () => {
-  test("bekannte IDs", () => {
-    expect(usage.providerName("anthropic")).toBe("Anthropic");
-    expect(usage.providerName("openai-codex")).toBe("OpenAI Codex");
-  });
-
-  test("unbekannte IDs werden Titel-cased", () => {
-    expect(usage.providerName("some-new-provider")).toBe("Some New Provider");
-    expect(usage.providerName("some_new.provider")).toBe("Some New Provider");
-  });
-
-  test("leere ID", () => {
-    expect(usage.providerName("")).toBe("Unbekannt");
   });
 });
 
@@ -225,7 +217,7 @@ describe("normalizeLimit / exhausted", () => {
   test("status exhausted markiert das Limit", () => {
     const out = usage.dedupe(
       [rawLimit({ status: "exhausted", amount: { usedFraction: 0.9 } })],
-      [],
+      NEUTRAL,
     );
     expect(out[0].exhausted).toBe(true);
     expect(out[0].statusLabel).toBe("erschöpft");
@@ -233,10 +225,85 @@ describe("normalizeLimit / exhausted", () => {
   });
 
   test("ohne status bleibt alles ok", () => {
-    const out = usage.dedupe([rawLimit()], []);
+    const out = usage.dedupe([rawLimit()], NEUTRAL);
     expect(out[0].status).toBe("ok");
     expect(out[0].statusLabel).toBe("");
     expect(out[0].exhausted).toBe(false);
+  });
+});
+
+// MiniMax' Wochenfenster existiert nicht — im Dashboard steht dort
+// "Unlimited". omp rechnet aus `current_weekly_remaining_percent: 100`
+// trotzdem ein 7-Tage-Fenster mit 0 % aus, und das sah im Panel wie ein
+// unangetastetes Kontingent aus.
+describe("unbegrenzte Fenster", () => {
+  // MiniMax' 7-Tage-Fenster, wie omp es liefert.
+  function weekly(overrides = {}) {
+    return rawLimit({
+      id: "general:7d",
+      label: "General 7 Day",
+      scope: { provider: "minimax-code", shared: true, windowId: "7d" },
+      window: { id: "7d", label: "7 Day", durationMs: 7 * DAY, resetsAt: 9000 },
+      amount: { used: 0, usedFraction: 0, remaining: 100, remainingFraction: 1, unit: "percent" },
+      ...overrides,
+    });
+  }
+
+  test("MiniMax' 7-Tage-Fenster wird als unbegrenzt gezeigt, nicht als 0 %", () => {
+    const out = usage.dedupe([weekly()], MINIMAX);
+    expect(out[0].unlimited).toBe(true);
+    expect(out[0].percentText).toBe("∞");
+    expect(out[0].statusLabel).toBe("unbegrenzt");
+    // Kein Füllstand: der Meter bleibt leer (Panel zeichnet erst ab 0).
+    expect(out[0].fraction).toBe(-1);
+    // Das Ende einer Woche ohne Limit ist kein Reset.
+    expect(out[0].resetsAt).toBeNaN();
+  });
+
+  test("echter Wochenverbrauch zählt wieder als Kontingent", () => {
+    const out = usage.dedupe(
+      [weekly({ amount: { usedFraction: 0.3, unit: "percent" } })],
+      MINIMAX,
+    );
+    expect(out[0].unlimited).toBe(false);
+    expect(out[0].percentText).toBe("30%");
+    expect(out[0].resetsAt).toBe(9000);
+  });
+
+  test("nur das gelistete Fenster des gelisteten Providers", () => {
+    // MiniMax' 5-h-Fenster: frisch zurückgesetzt, aber ein echtes Limit.
+    const interval = usage.dedupe(
+      [weekly({ window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR, resetsAt: 9000 } })],
+      MINIMAX,
+    );
+    expect(interval[0].unlimited).toBe(false);
+    expect(interval[0].percentText).toBe("0%");
+
+    // Anthropics 7-Tage-Fenster am Wochenanfang steht ebenfalls auf 0 %.
+    const other = usage.dedupe([weekly()], ANTHROPIC);
+    expect(other[0].unlimited).toBe(false);
+    expect(other[0].percentText).toBe("0%");
+  });
+
+  test("ein unbegrenztes Fenster verschiebt worst nicht", () => {
+    const out = usage.parse(
+      reportOf({
+        provider: "minimax-code",
+        metadata: { models: ["general"] },
+        limits: [
+          weekly(),
+          rawLimit({
+            id: "general:5h",
+            label: "General 5 Hour",
+            window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR, resetsAt: 3000 },
+            amount: { usedFraction: 0.04, unit: "percent" },
+          }),
+        ],
+      }),
+    );
+    expect(out.worst).toBeCloseTo(0.04);
+    expect(out.worstTitle).toBe("General · 5 Hour");
+    expect(out.providers[0].worstTitle).toBe("General · 5 Hour");
   });
 });
 
@@ -295,62 +362,58 @@ describe("compact / decimal / plural", () => {
   });
 });
 
-describe("planLabel / accountLabel", () => {
-  test("nur planType ist eine Planangabe, orgName wird ignoriert", () => {
-    expect(usage.planLabel({ planType: "pro", orgName: "acme" })).toBe("pro");
-    // Regressionsfall: Anthropic liefert kein planType, dadurch stand der
-    // Name des Kontoinhabers als Plan im Panel.
-    expect(usage.planLabel({ orgName: "Ada Lovelace" })).toBe("");
-    expect(usage.planLabel({ orgName: "acme" })).toBe("");
-    expect(usage.planLabel({})).toBe("");
-  });
-
+describe("accessLabel / accountLabel", () => {
   // Die Metadaten unten sind die echten Felder aus `omp usage --json`:
-  // planType liefert nur zai/openai-codex, die übrigen drei Provider gar
-  // keinen Plan. Ohne scopeLabel blieb deren Kopfzeilen-Slot leer.
-  test("ohne planType tritt die Angabe ein, die der Provider wirklich führt", () => {
+  // planType liefert nur zai/openai-codex, die übrigen Provider gar keinen
+  // Plan. Jede Angabe trägt ihr Substantiv — sonst stünde in derselben
+  // Spalte "lite" neben "Org Ada Lovelace".
+  test("jede Angabe trägt ihr Substantiv, auch der Plan", () => {
+    // zai / openai-codex
+    expect(usage.accessLabel({ planType: "lite" })).toBe("Plan lite");
     // anthropic
     expect(
-      usage.scopeLabel({ email: "a@example.com", orgName: "Ada Lovelace" }),
+      usage.accessLabel({ email: "a@example.com", orgName: "Ada Lovelace" }),
     ).toBe("Org Ada Lovelace");
     // google-antigravity
     expect(
-      usage.scopeLabel({ email: "a@example.com", projectId: "example-project" }),
+      usage.accessLabel({ email: "a@example.com", projectId: "example-project" }),
     ).toBe("Projekt example-project");
     // minimax-code: `video` ist gemeldet, aber nicht nutzbar
     expect(
-      usage.scopeLabel({
+      usage.accessLabel({
         source: "minimax-token-plan",
         models: ["general", "video"],
         unavailableModels: ["video"],
       }),
     ).toBe("Modell general");
-    expect(usage.scopeLabel({ models: ["general", "video"] })).toBe(
+    expect(usage.accessLabel({ models: ["general", "video"] })).toBe(
       "Modelle general, video",
     );
   });
 
-  test("mit planType bleibt scopeLabel leer statt den Plan zu doppeln", () => {
+  // Regressionsfall: `orgName` ist bei Consumer-Accounts der Name der
+  // Person. Als Plan gelesen stand dort "Anthropic · Ada Lovelace".
+  test("der Plan hat Vorrang, jede Angabe steht allein", () => {
     // openai-codex meldet orgName "free" — gleich dem planType.
-    expect(usage.scopeLabel({ planType: "free", orgName: "free" })).toBe("");
-    expect(usage.scopeLabel({ planType: "lite" })).toBe("");
+    expect(usage.accessLabel({ planType: "free", orgName: "free" })).toBe("Plan free");
+    expect(usage.accessLabel({ planType: "pro", orgName: "acme" })).toBe("Plan pro");
+    expect(usage.accessLabel({ orgName: "acme", projectId: "p1" })).toBe("Org acme");
   });
 
-  test("orgName schlägt projectId, keine Angabe bleibt leer", () => {
-    expect(usage.scopeLabel({ orgName: "acme", projectId: "p1" })).toBe("Org acme");
-    expect(usage.scopeLabel({ email: "a@example.com" })).toBe("");
-    expect(usage.scopeLabel({})).toBe("");
+  test("ohne jede Angabe bleibt der Slot leer", () => {
+    expect(usage.accessLabel({ email: "a@example.com" })).toBe("");
+    expect(usage.accessLabel({})).toBe("");
     // Alle Modelle blockiert: keine Auskunft ist besser als "Modelle ".
-    expect(usage.scopeLabel({ models: ["video"], unavailableModels: ["video"] })).toBe("");
+    expect(usage.accessLabel({ models: ["video"], unavailableModels: ["video"] })).toBe("");
   });
 
   // Non-Array-Felder werden ignoriert, nicht als Zeichenliste iteriert —
   // ein Refactor mit Array.from würde aus "general" 7 Buchstaben-Modelle
   // machen, und das ginge sonst unbemerkt durch.
   test("models als String statt Array wird ignoriert", () => {
-    expect(usage.scopeLabel({ models: "general" })).toBe("");
+    expect(usage.accessLabel({ models: "general" })).toBe("");
     expect(
-      usage.scopeLabel({ models: ["general"], unavailableModels: "general" }),
+      usage.accessLabel({ models: ["general"], unavailableModels: "general" }),
     ).toBe("Modell general");
   });
 
@@ -393,7 +456,7 @@ describe("collapseAccounts", () => {
 
   // Roher Report statt normalizeReport-Output: fehlendes account-Feld darf
   // nicht crashen (crashte vorher an .length von undefined). Es wird wie
-  // ein leeres Konto übersprungen — das einzige nicht-leare wandert in die
+  // ein leeres Konto übersprungen — das einzige nicht-leere wandert in die
   // Fußzeile.
   test("fehlendes account-Feld wird wie ein leeres behandelt", () => {
     expect(usage.collapseAccounts([{}, { account: "a@example.com" }])).toBe(
@@ -582,6 +645,21 @@ describe("parse", () => {
     expect(out.error).toBe("");
     expect(out.providers).toHaveLength(1);
     expect(out.providers[0].id).toBe("zai");
+  });
+
+  // Auf Vertragsebene: ein unbekannter Provider wird über die Registry
+  // aufgelöst, der Anzeigename entsteht via fallbackName() per
+  // Titelcasing — Kerncode hält sich an das Schema und überlässt die
+  // Namensbildung der Registry.
+  test("unbekannter Provider liefert einen titelcasierten Anzeigenamen", () => {
+    const out = usage.parse(
+      reportOf(
+        rawProvider({ provider: "some-new-provider", limits: [rawLimit({ amount: {} })] }),
+      ),
+    );
+    expect(out.error).toBe("");
+    expect(out.providers[0].name).toBe("Some New Provider");
+    expect(out.providers[0].id).toBe("some-new-provider");
   });
 });
 

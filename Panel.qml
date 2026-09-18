@@ -556,12 +556,10 @@ Panel {
           if (!provider)
             return ""
           var parts = []
-          if (String(provider.plan || "") !== "")
-            parts.push(provider.plan)
-          // Provider ohne Plan: die Angabe, die omp für ihn wirklich führt
-          // (Organisation, Projekt, Modellklassen).
-          else if (String(provider.scope || "") !== "")
-            parts.push(provider.scope)
+          // Was für ein Zugang das ist: Plan, Org, Projekt oder Modell —
+          // immer beschriftet, immer genau eine Angabe (accessLabel()).
+          if (String(provider.access || "") !== "")
+            parts.push(provider.access)
           // Leer, solange alle Provider dasselbe Konto melden — das steht
           // dann einmal in der Fußzeile.
           if (String(provider.account || "") !== "")

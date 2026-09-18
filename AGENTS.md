@@ -9,7 +9,7 @@ einem Bar-Widget samt Popup.
 
 - **Zweck:** `omp usage --json` ausführen, das Ergebnis auf eine
   einheitliche Form bringen, in der Bar das knappste Fenster (Prozent) und
-  im Popup jedes Fenster mit Füllstand, Status, Reset-Countdown und Plan
+  im Popup jedes Fenster mit Füllstand, Status, Reset-Countdown und Zugang
   zeigen.
 - **Plugin-Form:** Omarchy-Bar-Widget (`kinds: ["bar-widget"]`,
   `entryPoints.barWidget: "Panel.qml"`). Identifikation als
@@ -22,9 +22,13 @@ einem Bar-Widget samt Popup.
 
 ```
 usage.sh  ──► stdout JSON  ──►  Usage.js: parse()  ──►  Panel.qml (report)
-   ▲                                                              │
-   │                                                              ▼
-refresh() (poll / open / r / R / right-click / middle-click)   render
+   ▲                                │                       │
+   │                                ▼                       ▼
+refresh() (poll / open / r / R /    Providers.js          render
+right-click / middle-click)         .resolve(id)
+                                   → descriptor
+                                   (name, strip,
+                                    unlimitedWindows)
 ```
 
 1. **Trigger:** `Component.onCompleted`, `pollTimer`
@@ -41,17 +45,30 @@ refresh() (poll / open / r / R / right-click / middle-click)   render
    Vorspann-Sed-Pipeline schneidet auf das erste `{` zu; ergibt das nichts,
    ist es ebenfalls ein Fehlerobjekt.
 4. **Normalisierung:** `Usage.js` (`pragma library`, reine Funktionen,
-   ohne QML-Abhängigkeit) glättet vier Eigenheiten des Rohreports:
+   ohne QML-Abhängigkeit) glättet fünf Eigenheiten des Rohreports:
    uneinheitliche Mengenangaben → `usedFraction` als Wahrheit;
    `scope.sharedGroup` (Google Antigravity) wird per `dedupe()` auf eine
    Zeile reduziert (höchster Füllstand gewinnt); Labels werden von
    redundanten Provider-/Fenstertokens befreit; ein providerübergreifend
-   gleiches Konto wandert per `collapseAccounts()` nach `sharedAccount`.
-5. **Render:** `Panel.qml` zeigt `worst` (knappster Wert über alle
+   gleiches Konto wandert per `collapseAccounts()` nach `sharedAccount`;
+   ein Fenster ohne Kontingent wird als `unlimited` markiert statt als
+   0-%-Limit — welche Fenster das pro Provider sind, hält jetzt das
+   jeweilige Provider-Plugin in `providers/` (`unlimitedWindows`), nicht
+   mehr `Usage.js`.
+5. **Provider-Registry:** `Providers.js` aggregiert die Plugins in
+   `providers/<Name>.js` zu `PLUGINS`, baut darauf eine `BY_ID`-Map und
+   liefert `resolve(id)` immer einen vollständigen Descriptor (Name,
+   Strip-Tokens, Phantom-Fenster). `Usage.js` ruft pro Report einmal
+   `resolve(report.provider)` und reicht den Descriptor an
+   `normalizeLimit` / `dedupe` weiter; unbekannte Provider erhalten einen
+   Fallback-Descriptor, dessen Name aus der ID per `[-_.]`-Trennung
+   automatisch entsteht (`fallbackName`). Der Kern enthält NULL
+   Providerwissen.
+6. **Render:** `Panel.qml` zeigt `worst` (knappster Wert über alle
    Provider) als Zahl in der Bar; im Popup je Provider eine Liste nach
    `durationMs` (kurz zuerst), je Limit Titel + Status/Absolutwert +
    Reset-Countdown + Prozent + Meter-Animation.
-6. **Fehlerstrategie:** `fetchError` ist getrennt vom `report`; bei Fehler
+7. **Fehlerstrategie:** `fetchError` ist getrennt vom `report`; bei Fehler
    bleiben die letzten Zahlen sichtbar, der Fehler steht daneben.
    `failFetch()` läuft sowohl bei `onRunningChanged` (Skript fehlt) als auch
    nach 25 s Watchdog (Hänger) — und der Watchdog **killt** den Prozess.
@@ -62,10 +79,13 @@ refresh() (poll / open / r / R / right-click / middle-click)   render
 |---|---|
 |`manifest.json`|Plugin-Metadaten + Settings-Schema (Single Source of Truth für UI-Optionen)|
 |`Panel.qml`|Einziger Entry Point: `WidgetButton` (Bar) + `KeyboardPanel` (Popup)|
-|`Usage.js`|Reine Normalisierungsfunktionen, `.pragma library`|
+|`Usage.js`|Reine Normalisierungsfunktionen, `.pragma library` — providerfrei, holt Strip-Tokens und Phantom-Fenster aus der Registry|
+|`Providers.js`|Aggregator: importiert alle Plugins in `providers/`, hält `PLUGINS` und die `BY_ID`-Map, exportiert `resolve(id)` und `fallbackName(id)`|
+|`providers/`|Ein Plugin je Provider, dessen Anzeigename oder Verhalten von der Ableitung abweicht: `Zai.js`, `OpenAICodex.js`, `OpenRouter.js`, `GitHubCopilot.js` (Schreibweise), `MinimaxCode.js` (Schreibweise + Phantom-Fenster). `anthropic` und `google-antigravity` brauchen keins — ihr Name fällt aus der ID|
 |`usage.sh`|PATH-robuster Wrapper um `omp usage --json`, mit Zeitlimit|
-|`tests/`|`bun test`-Suiten: `usage.test.js`, `usage-sh.test.js`, `manifest.test.js`|
-|`README.md`|Doku, Bedienung, IPC, Settings, Dev-Notizen|
+|`tests/`|`bun test`-Suiten: `usage.test.js`, `usage-sh.test.js`, `manifest.test.js`, Registry-Konsistenztest; `load.js` lädt QML-`.pragma library`-Dateien für die Suite|
+|`.omp/skills/omp-quota-provider/`|Projekt-Skill (native Provider, `.omp/skills/*/SKILL.md`): Ablauf zum Anlegen eines Providers — Entscheidungsregel, Descriptor-Vertrag, Registry-Eintrag, Tests, Abnahme. Lesen per `skill://omp-quota-provider`|
+|`README.md`|Doku, Bedienung, IPC, Settings, Dev-Notizen, „Provider hinzufügen"|
 |`.gitignore`|Editor-Schrott (`*.swp`, `*~`, `.DS_Store`)|
 
 Andere Plugin-Verzeichnisse unter `~/.config/omarchy/plugins/` (z. B.
@@ -155,13 +175,42 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
   Easing.OutCubic } }` für die Meter-Füllung — funktioniert nur mit dem
   Count-Modell oben.
 
-### JavaScript (`Usage.js`)
+### JavaScript (`Usage.js`, `Providers.js`, `providers/*.js`)
 
-- `.pragma library` als erste Zeile (eigenständige Library, kein QML).
-- Reine Funktionen, keine Closures, keine `Date.now()` direkt (Wert kommt
-  rein — Testbarkeit).
-- Provider-Strip-Liste in `PROVIDERS`; unbekannte Provider via
-  `id.split(/[-_.]/)` zu "Some New Provider".
+- `.pragma library` als erste Zeile (eigenständige Library, kein QML);
+  Imports anderer Libraries folgen direkt darunter als `.import "pfad.js"
+  as NS`. Keine ES6-Syntax: kein `let`/`const`, keine Arrow-Functions,
+  keine Template-Strings, keine `class`, kein `Object.assign`, kein Spread.
+  Nur `var` und `function` — der Test-Loader erkennt Exporte genau über
+  diese zwei Formen.
+- **Providerwissen lebt NUR in `providers/<Name>.js`** — und dort nur, was
+  omps Report NICHT hergibt: `var descriptor = { id, name }` plus optional
+  `unlimitedWindows`. `Providers.js` importiert alle Plugins alphabetisch,
+  führt sie in `PLUGINS` zusammen und baut daraus die `BY_ID`-Map mit
+  bereits vervollständigten Descriptoren. `resolve(id)` liefert IMMER alle
+  vier Felder (`id`, `name`, `strip`, `unlimitedWindows`), damit der Kern
+  nie gegen fehlende Felder prüfen muss; unbekannte IDs erhalten einen
+  Fallback-Descriptor, dessen Name per `[-_.]`-Trennung in
+  `fallbackName(id)` entsteht (`some-new-provider` → `Some New Provider`;
+  leer/fehlend → `Unbekannt`). `Usage.js` enthält NULL Providerwissen.
+- `strip` steht NICHT im Plugin: `stripTokens(id, name)` leitet die Tokens
+  aus ID **und** Anzeigenamen ab und dedupliziert case-insensitiv. Grund:
+  omps echte Labels führen den Provider fast nie („Claude 5 Hour",
+  „General 7 Day", „30 days") — von sieben Handlisten feuerte genau eine
+  („ZAI 5 Hours Token Quota"), und deren Token steckt in der ID. Beide
+  Quellen sind nötig, weil der Name Schreibweisen trägt, die die ID nicht
+  hergibt („Z.ai" mit Punkt). Der synthetische Fallback-Name geht NICHT in
+  die Tokens, sonst wäre „Unbekannt" bei leerer ID ein Strip-Token.
+- Ein Plugin gibt es nur, wo `fallbackName(id)` danebenliegt (`zai` →
+  „Zai", `minimax-code` → „Minimax Code") oder ein Quirk dazukommt.
+  `anthropic` und `google-antigravity` brauchen deshalb KEINE Datei — eine
+  anzulegen, die nur den ableitbaren Namen wiederholt, ist toter Eintrag.
+- Eine Provider-Datei ohne `PLUGINS`-Eintrag in `Providers.js` ist stumm:
+  der Registry-Konsistenztest fängt das.
+- `resolve()` darf KEINE Teilobjekte liefern — Kerncode vertraut auf
+  vollständige Felder und prüft nichts nach.
+- Reine Funktionen in `Usage.js`, keine Closures, keine `Date.now()`
+  direkt (Wert kommt rein — Testbarkeit).
 - Regex-Escaping Pflicht beim Token-Strip (`token.replace(/[.*+?^${}()|
   [\]\\]/g, "\\$&")`).
 - `num(value)` als zentraler `Number()`-Wrapper — aber NICHT für
@@ -169,21 +218,31 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
   JSON-null als 0 % oder Reset „jetzt" erscheinen statt als „keine Angabe"
   (NaN). `clamp(value, lo, hi)` für 0..1-Bounds.
 - Sortierreihenfolge NIE nach Füllstand (Liste würde bei jedem Refresh
-  springen). Provider alphabetisch (`a.name.localeCompare(b.name)`),
+  springen). Provider alphabetisch (`a.name.localeCompare(b.name, "en")`),
   Limits nach `durationMs` aufsteigend.
-- `planLabel()` liefert ausschließlich `planType`. Kein `orgName`-Fallback:
-  Anthropic liefert kein `planType`, damit stand dort der Name der Person
-  als „Plan".
-- `scopeLabel()` füllt den Plan-Slot der Provider, für die omp kein
-  `planType` hat (Anthropic, Google Antigravity, MiniMax Code): `orgName` →
-  `projectId` → `models` minus `unavailableModels`, jeweils mit Substantiv
-  davor („Org …", „Projekt …", „Modell(e) …"). Liegt `planType` vor, gibt es
-  leer zurück — sonst stünde bei OpenAI Codex `free · Org free`. Das
-  Substantiv ist Pflicht: ohne es wäre es genau der `orgName`-als-Plan-Bug,
-  den `planLabel()` verhindert. `Panel.qml` zeigt `plan` **oder** `scope`,
-  nie beides.
+- `accessLabel()` füllt den Zugangs-Slot der Kopfzeile mit **genau einer**
+  Angabe, immer im Format „Substantiv Wert": `planType` („Plan lite") →
+  `orgName` („Org …") → `projectId` („Projekt …") → `models` minus
+  `unavailableModels` („Modell(e) …"). Das Substantiv ist Pflicht, auch
+  beim Plan: ohne es standen in derselben Spalte ein nackter Planname und
+  eine beschriftete Angabe nebeneinander. `orgName` NUR ohne `planType` —
+  bei OpenAI Codex ist `orgName` gleich `free` (Dopplung), und bei
+  Consumer-Accounts steht dort der Name der Person, der als Plan gelesen
+  wie ein Tarif aussah („Anthropic · Ada Lovelace"). Es gibt KEIN `plan`-
+  und kein `scope`-Feld mehr: ein Slot, ein Feld (`provider.access`).
 - `STATUS_LABELS` spiegelt omps Vokabular (`ok`, `warning`, `exhausted`,
   `unknown`); unbekannte Werte werden unverändert durchgereicht.
+- Phantom-Fenster ohne Kontingent (MiniMax' 7-Tage-Fenster, das omp aus
+  `current_weekly_remaining_percent: 100` ableitet — 20/20 Verlaufs-
+  Snapshots 0,0 %, während 5 h auf 35 % lief) werden jetzt im
+  Provider-Plugin unter `descriptor.unlimitedWindows` geführt, nicht in
+  `Usage.js`. `isUnlimited(plugin, entry, fraction)` greift nur bei
+  **exakt** 0 % UND wenn die Fenster-ID in `plugin.unlimitedWindows` steht
+  — echter Verbrauch macht die Zeile wieder zum Limit. Die Zeile wird
+  NICHT gelöscht: „Fenster fehlt" wirft die Frage auf, die „unbegrenzt"
+  beantwortet. `fraction: -1` blendet den Meter aus und verliert jeden
+  `worst`-Vergleich, `resetsAt: NaN` unterdrückt den Countdown — das
+  Wochenende ohne Limit ist kein Reset.
 - `amountText()` liefert den Absolutwert nur bei `unit !== "percent"` —
   sonst wiederholt er den Prozentwert. `compact()` formatiert mit deutschem
   Dezimalkomma (850 / 1,2k / 12k / 4,1M).
@@ -233,9 +292,11 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
 |---|---|
 |`manifest.json`|Plugin-Identität, Settings-Schema|
 |`Panel.qml`|UI, Lifecycle, IPC, Refresh-Logik, Error-Handling|
-|`Usage.js`|JSON → Render-Modell|
+|`Usage.js`|JSON → Render-Modell (providerfrei)|
+|`Providers.js`|Provider-Registry: `PLUGINS`, `BY_ID`, `resolve(id)`, `fallbackName(id)`|
+|`providers/`|Ein `descriptor` je Provider mit abweichender Schreibweise oder Quirk (siehe `skill://omp-quota-provider`)|
 |`usage.sh`|`omp`-Aufruf, PATH-Auflösung, Zeitlimit, JSON-Garantie|
-|`README.md`|Bedienung, Dev-Notizen, Tests|
+|`README.md`|Bedienung, Dev-Notizen, Tests, „Provider hinzufügen"|
 
 Entry-Point für die Bar ist ausschließlich `Panel.qml`. Es gibt keinen
 zusätzlichen Bootstrap-Code.
@@ -258,14 +319,31 @@ zusätzlichen Bootstrap-Code.
 
 ## Testing & QA
 
-- **Test-Framework:** `bun test` gegen `tests/`. `Usage.js` wird als
-  `.pragma library` per `new Function` geladen, `usage.sh` gegen ein
-  Fake-omp in einem temporären PATH gefahren.
-- **Falle beim Not-found-Pfad:** Ein PATH, der `/usr/bin` enthält, findet
-  `mise` und damit über `mise which omp` das echte omp — der Test ruft dann
-  eine Provider-API. Deterministisch wird er nur mit isoliertem PATH
-  (Symlinks auf `sed`, `mktemp`, `rm`, `timeout`), `mise`-Stub und
-  absolutem `/bin/bash`-Aufruf.
+- **Test-Framework:** `bun test` gegen `tests/`. `Usage.js` und
+  `Providers.js` sind `.pragma library`-Dateien mit `.import`-Ketten — sie
+  werden über `tests/load.js` geladen, das rekursiv jede `.import`-Zeile
+  auflöst und die exportierten `var`/`function`-Namen per Regex
+  (`/^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm`) einsammelt. `new Function`
+  allein reicht nicht: es parst die `.import`-Direktive nicht, und ohne
+  Auflösung scheitert `Providers.js` schon beim Laden.
+- **Registry-Konsistenztest:** prüft für jedes `providers/*.js`, dass (a)
+  die Datei einen Top-Level-`descriptor`-Export mit `id` und `name`
+  deklariert und `strip` NICHT selbst mitbringt (sonst wäre die Ableitung
+  umgangen), (b) `resolve(id)` daraus alle vier Felder vervollständigt,
+  (c) die `id` in `Providers.js` per `.import` referenziert und in
+  `PLUGINS` eingetragen ist, und (d) keine `id` in `PLUGINS` auf eine
+  fehlende Datei zeigt. Fängt „Datei angelegt, Import vergessen" (Provider
+  ist sonst still) und „Import eingetragen, Datei gelöscht" (Aggregation
+  wirft beim Laden).
+- **Fallback-Naming:** `fallbackName("some-new-provider")` →
+  `"Some New Provider"` (Trenner `[-_.]`, leere Segmente überspringen,
+  jedes Segment erstes Zeichen groß). Pin via Test, weil der Kern auf
+  vollständige Descriptoren vertraut und nichts nachprüft.
+- **`usage.sh` gegen Fake-omp:** in einem temporären PATH mit
+  isolierten `sed`/`mktemp`/`rm`/`timeout`-Symlinks, `mise`-Stub und
+  absolutem `/bin/bash`-Aufruf. Ohne diese Isolation findet `/usr/bin`
+  `mise` und damit über `mise which omp` das echte omp — der Test ruft
+  dann eine Provider-API.
 - **Smoke-Tests für AI-Agents / Maintainer:**
   1. `./usage.sh` muss immer valides JSON auf stdout liefern (auch wenn
      `omp` fehlt: `{"error": "omp nicht gefunden ..."}`).
@@ -285,6 +363,32 @@ zusätzlichen Bootstrap-Code.
 
 ## Gotchas (aus README, hier als AI-Anti-Pattern-Checkliste)
 
+- **Niemals** Providerwissen (Anzeigename, Strip-Token, Phantom-Fenster)
+  in `Usage.js` zurückholen — der Kern ist providerfrei. Alles, was pro
+  omp-Anbieter anders ist, gehört in `providers/<Name>.js` als
+  `descriptor`. Eine Wiederbelebung von Name-/Strip-/Phantom-Tabellen in
+  `Usage.js` wäre ein Rückschritt hinter den aktuellen Stand.
+- **Niemals** eine Provider-Datei anlegen ohne gleichzeitigen
+  `PLUGINS`-Eintrag in `Providers.js` — der Registry-Konsistenztest
+  schlägt fehl und die Datei bleibt stumm (kein `resolve()`-Treffer,
+  kein Render).
+- **Niemals** ein Plugin anlegen, das nur den ableitbaren Anzeigenamen
+  wiederholt (`anthropic`, `google-antigravity`), und **niemals** eine
+  Strip-Liste von Hand pflegen: `stripTokens(id, name)` leitet sie ab.
+  Die Handlisten waren zu sechs von sieben Einträgen tot, weil omps echte
+  Labels den Provider gar nicht nennen („Claude 5 Hour", „General 7 Day").
+  Ein Plugin rechtfertigt sich über abweichende Schreibweise oder einen
+  Quirk, den omps Daten nicht ausdrücken — sonst nicht.
+- **Niemals** ES6 in den JS-Libraries (`Usage.js`, `Providers.js`,
+  `providers/*.js`): kein `let`/`const`, keine Arrow-Functions, keine
+  Template-Strings, keine `class`, kein `Object.assign`, kein Spread.
+  QML-JS-Dialekt, nur `var` und `function` — der Test-Loader erkennt
+  Exporte per Regex auf genau diese zwei Formen und scheitert sonst
+  stillschweigend.
+- **Niemals** `resolve()` Teilobjekte liefern lassen — der Kern vertraut
+  auf vollständige Felder (`id`, `name`, `strip`, `unlimitedWindows`)
+  und prüft nichts nach. Unbekannte IDs gehen durch `fallbackName(id)`,
+  nicht durch ein teilweise gefülltes Descriptor-Objekt.
 - **Niemals** die geerbte `setting()`-Helper benutzen — Bindings bleiben
   nicht reaktiv.
 - **Niemals** einen geratenen Timer für die `settings`-Injektion — das ist

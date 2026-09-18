@@ -1,10 +1,16 @@
 .pragma library
+.import "Providers.js" as Providers
 
 // Normalisierung des `omp usage --json`-Reports auf eine Form, die das Panel
 // direkt rendern kann. Reine Funktionen, keine QML-Abhängigkeiten — damit
 // derselbe Code mit `bun Usage.test.js` gegen echte omp-Ausgaben läuft.
 //
-// Der Rohreport hat vier Eigenheiten, die hier verschwinden:
+// Providerwissen liegt ausschließlich in `providers/*.js`, aufgelöst über
+// `Providers.js`: der Kern kennt weder Namen noch IDs noch Fenster-IDs, er
+// bekommt alles über den Plugin-Descriptor gereicht (`name`, `strip`,
+// `unlimitedWindows`).
+//
+// Der Rohreport hat fünf Eigenheiten, die hier verschwinden:
 //
 //  1. Mengenangaben sind uneinheitlich. Anthropic liefert used/limit/unit
 //     "percent", ZAI liefert für Token-Fenster nur `usedFraction`. Einzig
@@ -18,18 +24,10 @@
 //  4. Dasselbe Konto steht in jedem Provider-Report. Viermal dieselbe
 //     E-Mail (im Redaktionsmodus viermal "ca*") ist Rauschen, also wandert
 //     ein providerübergreifend gleiches Konto nach `sharedAccount`.
-
-// Anzeigename je Provider plus die Tokens, die in einem Limit-Label
-// redundant sind, weil der Provider bereits darüber steht.
-var PROVIDERS = {
-  "anthropic": { name: "Anthropic", strip: ["Anthropic"] },
-  "openai-codex": { name: "OpenAI Codex", strip: ["OpenAI", "Codex"] },
-  "zai": { name: "Z.ai", strip: ["ZAI", "Z.ai"] },
-  "google-antigravity": { name: "Google Antigravity", strip: ["Google", "Antigravity"] },
-  "minimax-code": { name: "MiniMax Code", strip: ["MiniMax"] },
-  "openrouter": { name: "OpenRouter", strip: ["OpenRouter"] },
-  "github-copilot": { name: "GitHub Copilot", strip: ["GitHub", "Copilot"] }
-};
+//  5. Ein unbegrenztes Fenster kommt als Fenster mit 0 % Verbrauch an. Welche
+//     Fenster-IDs das pro Provider sind, hält das jeweilige Provider-Plugin
+//     in `unlimitedWindows`. Das ist keine Auskunft, sieht aber wie eine
+//     aus.
 
 // omps Statusvokabular, aus der Quelle der Zuordnung in der omp-Binary:
 // kein Restkontingent -> "exhausted", bis 10 % Rest -> "warning", ohne
@@ -55,19 +53,18 @@ var UNITS = {
   "messages": "Nachrichten"
 };
 
-function providerName(id) {
-  var known = PROVIDERS[id];
-  if (known)
-    return known.name;
-  // Unbekannter Provider: "some-new-provider" -> "Some New Provider".
-  var parts = String(id || "").split(/[-_.]/);
-  var out = [];
-  for (var i = 0; i < parts.length; i++) {
-    if (parts[i].length === 0)
-      continue;
-    out.push(parts[i].charAt(0).toUpperCase() + parts[i].slice(1));
-  }
-  return out.length > 0 ? out.join(" ") : "Unbekannt";
+// Nur bei exakt 0 %: sobald der Anbieter dort echten Verbrauch meldet, gibt
+// es das Limit wirklich, und die Zeile zählt wieder als Kontingent. Ein
+// erschöpftes Fenster kommt hier nie an — omp setzt dafür `usedFraction` auf
+// 1, nicht auf 0.
+function isUnlimited(plugin, entry, fraction) {
+  var unlimited = plugin.unlimitedWindows;
+  if (!(unlimited instanceof Array) || unlimited.length === 0)
+    return false;
+  var window = entry.window || {};
+  var scope = entry.scope || {};
+  var id = String(window.id || scope.windowId || "");
+  return unlimited.indexOf(id) >= 0 && fraction === 0;
 }
 
 function clamp(value, lo, hi) {
@@ -195,7 +192,7 @@ function limitTitle(label, windowLabel, strip) {
 }
 
 // Eine Zeile im Panel: Titel, Füllstand, Absolutwert, Status, Reset.
-function normalizeLimit(entry, strip) {
+function normalizeLimit(entry, plugin) {
   var amount = entry.amount || {};
   var window = entry.window || {};
   var fraction = usedFraction(amount);
@@ -203,17 +200,23 @@ function normalizeLimit(entry, strip) {
   // einzige Stelle, an der ein Überziehen sichtbar wird: `fraction` ist auf
   // 1 begrenzt, weil der Meter nicht über den Rand laufen darf.
   var status = String(entry.status || "ok").trim().toLowerCase() || "ok";
+  // Ein unbegrenztes Fenster hat keinen Füllstand (-1 blendet den Meter aus,
+  // und der Wert verliert jeden `worst`-Vergleich, der bei -1 beginnt),
+  // keinen Absolutwert und keinen Reset: das Ende einer Woche ohne Limit
+  // ändert nichts.
+  var unlimited = isUnlimited(plugin, entry, fraction);
   return {
     id: String(entry.id || ""),
-    title: limitTitle(entry.label, window.label, strip),
-    fraction: fraction,
-    percentText: fraction >= 0 ? Math.round(fraction * 100) + "%" : "—",
-    amountText: amountText(amount),
-    resetsAt: num(window.resetsAt),
+    title: limitTitle(entry.label, window.label, plugin.strip),
+    fraction: unlimited ? -1 : fraction,
+    percentText: unlimited ? "∞" : (fraction >= 0 ? Math.round(fraction * 100) + "%" : "—"),
+    amountText: unlimited ? "" : amountText(amount),
+    resetsAt: unlimited ? NaN : num(window.resetsAt),
     durationMs: num(window.durationMs),
     status: status,
-    statusLabel: statusLabel(status),
-    exhausted: status === "exhausted"
+    statusLabel: unlimited ? "unbegrenzt" : statusLabel(status),
+    exhausted: status === "exhausted",
+    unlimited: unlimited
   };
 }
 
@@ -221,14 +224,14 @@ function normalizeLimit(entry, strip) {
 // für sich; mit `sharedGroup` gewinnt der höchste Füllstand der Gruppe,
 // damit ein Rundungsunterschied zwischen den Meldungen nicht nach unten
 // verschluckt wird.
-function dedupe(limits, strip) {
+function dedupe(limits, plugin) {
   var out = [];
   var groups = {};
   for (var i = 0; i < limits.length; i++) {
     var entry = limits[i] || {};
     var scope = entry.scope || {};
     var group = String(scope.sharedGroup || "");
-    var normalized = normalizeLimit(entry, strip);
+    var normalized = normalizeLimit(entry, plugin);
     if (group.length === 0) {
       out.push(normalized);
       continue;
@@ -253,40 +256,39 @@ function byWindow(a, b) {
   return a.title.localeCompare(b.title, "en");
 }
 
-// Planzeile. Nur `planType` ist eine Planangabe; `orgName` ist bei
-// Consumer-Accounts der Name der Person (Anthropic liefert kein planType
-// und hätte sonst "Max Mustermann" als Plan angezeigt).
-function planLabel(metadata) {
-  return String((metadata || {}).planType || "").trim();
-}
-
-// Ein Provider ohne `planType` ließe den Slot in der Kopfzeile leer — omp
-// meldet den Plan nur für Z.ai ("lite") und OpenAI Codex ("free"). Für die
-// übrigen steht hier, was omp über den Zugang tatsächlich weiß. Jede Angabe
-// trägt ihr Substantiv, weil ein nackter Personen- oder Projektname im
-// Plan-Slot wie eine Planbezeichnung aussieht.
+// Der Zugangs-Slot in der Provider-Kopfzeile: genau eine Angabe, immer im
+// Format "Substantiv Wert". Das Substantiv ist Pflicht, auch beim Plan —
+// ohne es standen in derselben Spalte ein nackter Planname ("lite") und
+// eine beschriftete Angabe ("Org Ada Lovelace") nebeneinander, und der
+// Leser musste je Zeile raten, was für eine Auskunft er gerade sieht.
 //
-// Nur ein Wert, und nur ohne `planType`: bei OpenAI Codex ist `orgName`
-// gleich "free" und damit eine Dopplung des Plans. Die Prüfung läuft über
-// planLabel(), damit beide Funktionen dieselbe Vorstellung davon haben,
-// was als Plan zählt.
-function scopeLabel(metadata) {
+// Die Reihenfolge ist die Nähe zur Frage "was für ein Zugang ist das?":
+//
+//  - `planType` ist die Antwort, wo omp sie hat (Z.ai "lite", OpenAI Codex
+//    "free").
+//  - `orgName` NUR ohne Plan: bei OpenAI Codex ist orgName gleich "free"
+//    und damit eine Dopplung. Und es ist keine Planangabe — bei
+//    Consumer-Accounts steht dort der Name der Person, der als "Plan"
+//    gelesen wie ein Tarif aussah ("Anthropic · Max Mustermann").
+//  - `projectId`: Google Antigravity identifiziert den Zugang über das
+//    Cloud-Projekt.
+//  - `models` minus `unavailableModels`: MiniMax meldet weder Plan noch
+//    Konto, dafür die freigeschalteten Modellklassen.
+function accessLabel(metadata) {
   var meta = metadata || {};
-  if (planLabel(meta).length > 0)
-    return "";
+
+  var plan = String(meta.planType || "").trim();
+  if (plan.length > 0)
+    return "Plan " + plan;
 
   var org = String(meta.orgName || "").trim();
   if (org.length > 0)
     return "Org " + org;
 
-  // Google Antigravity identifiziert den Zugang über das Cloud-Projekt.
   var project = String(meta.projectId || "").trim();
   if (project.length > 0)
     return "Projekt " + project;
 
-  // MiniMax meldet weder Plan noch Konto, dafür die freigeschalteten
-  // Modellklassen — und in `unavailableModels`, welche davon gerade nicht
-  // nutzbar sind. Was übrig bleibt, ist die eigentliche Auskunft.
   var models = availableModels(meta);
   if (models.length > 0)
     return (models.length === 1 ? "Modell " : "Modelle ") + models.join(", ");
@@ -324,10 +326,9 @@ function accountLabel(metadata) {
 }
 
 function normalizeReport(report) {
-  var id = String(report.provider || "");
-  var known = PROVIDERS[id];
-  var strip = known ? known.strip : [];
-  var limits = dedupe(report.limits instanceof Array ? report.limits : [], strip);
+  var plugin = Providers.resolve(String(report.provider || ""));
+  var id = plugin.id;
+  var limits = dedupe(report.limits instanceof Array ? report.limits : [], plugin);
   limits.sort(byWindow);
 
   var worst = -1;
@@ -344,9 +345,8 @@ function normalizeReport(report) {
 
   return {
     id: id,
-    name: providerName(id),
-    plan: planLabel(report.metadata),
-    scope: scopeLabel(report.metadata),
+    name: plugin.name,
+    access: accessLabel(report.metadata),
     account: accountLabel(report.metadata),
     fetchedAt: num(report.fetchedAt),
     limits: limits,
