@@ -24,6 +24,11 @@ const usage = load("../Usage.js", [
   "collapseAccounts",
   "untilText",
   "agoText",
+  "refreshInterval",
+  "alarmFraction",
+  "rampFactor",
+  "barText",
+  "barTooltip",
 ]);
 
 const providers = load("../Providers.js", ["resolve"]);
@@ -705,5 +710,137 @@ describe("agoText", () => {
 
   test("fehlerhafte Eingaben", () => {
     expect(usage.agoText(NaN, now)).toBe("");
+  });
+});
+
+// Diese fünf Funktionen saßen als Inline-Ausdruck in Panel.qml und waren
+// damit von keinem Test erreichbar — die Grenzen der Settings und die Form
+// der Farbrampe waren reine Behauptung.
+describe("refreshInterval", () => {
+  test("klemmt auf 60..3600 s", () => {
+    expect(usage.refreshInterval(600, 300)).toBe(600);
+    expect(usage.refreshInterval(5, 300)).toBe(60);
+    expect(usage.refreshInterval(99999, 300)).toBe(3600);
+  });
+
+  test("rundet und akzeptiert numerische Strings (shell.json ohne --json)", () => {
+    expect(usage.refreshInterval("600", 300)).toBe(600);
+    expect(usage.refreshInterval(600.6, 300)).toBe(601);
+  });
+
+  test("unbrauchbare Eingabe fällt auf den Default, nicht auf 0", () => {
+    expect(usage.refreshInterval(undefined, 300)).toBe(300);
+    expect(usage.refreshInterval(null, 300)).toBe(300);
+    expect(usage.refreshInterval("", 300)).toBe(300);
+    expect(usage.refreshInterval("viel", 300)).toBe(300);
+    expect(usage.refreshInterval(true, 300)).toBe(300);
+  });
+});
+
+describe("alarmFraction", () => {
+  test("Prozent wird Anteil", () => {
+    expect(usage.alarmFraction(90, 90)).toBeCloseTo(0.9);
+    expect(usage.alarmFraction(75, 90)).toBeCloseTo(0.75);
+  });
+
+  test("nie 0: eine Schwelle von 0 färbte jedes Kontingent dauerhaft", () => {
+    expect(usage.alarmFraction(0, 90)).toBeCloseTo(0.05);
+    expect(usage.alarmFraction(-40, 90)).toBeCloseTo(0.05);
+  });
+
+  test("über 100 % bleibt bei 1", () => {
+    expect(usage.alarmFraction(140, 90)).toBe(1);
+  });
+
+  test("unbrauchbare Eingabe nimmt den Default", () => {
+    expect(usage.alarmFraction(null, 90)).toBeCloseTo(0.9);
+    expect(usage.alarmFraction("", 90)).toBeCloseTo(0.9);
+  });
+});
+
+describe("rampFactor", () => {
+  test("0 bei leerem Kontingent, 1 ab der Schwelle", () => {
+    expect(usage.rampFactor(0, 0.9)).toBe(0);
+    expect(usage.rampFactor(0.9, 0.9)).toBe(1);
+    expect(usage.rampFactor(1, 0.9)).toBe(1);
+  });
+
+  test("monoton steigend zwischen 0 und der Schwelle", () => {
+    var previous = -1;
+    for (var f = 0; f <= 0.9; f += 0.1) {
+      const value = usage.rampFactor(f, 0.9);
+      expect(value).toBeGreaterThan(previous);
+      previous = value;
+    }
+  });
+
+  test("Kurve liegt unter der Diagonale — die untere Hälfte bleibt ruhig", () => {
+    // Genau das ist der Zweck des Exponenten: linear wäre die halbe
+    // Schwelle schon halb alarmfarben.
+    expect(usage.rampFactor(0.45, 0.9)).toBeLessThan(0.3);
+    expect(usage.rampFactor(0.8, 0.9)).toBeLessThan(0.8);
+  });
+
+  test("unbegrenzt und ohne Angabe bleiben ruhig", () => {
+    expect(usage.rampFactor(-1, 0.9)).toBe(0);
+    expect(usage.rampFactor(NaN, 0.9)).toBe(0);
+  });
+
+  test("Schwelle 0 kippt nicht in eine Division durch 0", () => {
+    expect(usage.rampFactor(0.5, 0)).toBe(1);
+  });
+});
+
+describe("barText", () => {
+  test("Glyph mit Prozentwert", () => {
+    expect(usage.barText("G", 0.6, false, false)).toBe("G 60%");
+  });
+
+  test("Fehler schlägt den Wert", () => {
+    expect(usage.barText("G", 0.6, true, false)).toBe("G !");
+  });
+
+  test("vertikale Bar zeigt nur das Glyph — 28 px tragen keine Zahl", () => {
+    expect(usage.barText("G", 0.6, false, true)).toBe("G");
+  });
+
+  test("ohne Messung nur das Glyph", () => {
+    expect(usage.barText("G", -1, false, false)).toBe("G");
+    expect(usage.barText("G", NaN, false, false)).toBe("G");
+  });
+});
+
+describe("barTooltip", () => {
+  const now = 1_000_000;
+  const MINUTE = 60 * 1000;
+  const report = {
+    generatedAt: now - 3 * MINUTE,
+    worst: 0.6,
+    worstProvider: "Z.ai",
+    worstTitle: "Token Quota · 5 Hours",
+    exhausted: false,
+  };
+
+  test("Wert, Provider und Fenster", () => {
+    expect(usage.barTooltip(report, "", now)).toBe(
+      "omp: 60% — Z.ai · Token Quota · 5 Hours",
+    );
+  });
+
+  test("erschöpft wird benannt — 100 % sagt nicht, dass nichts mehr geht", () => {
+    expect(usage.barTooltip({ ...report, worst: 1, exhausted: true }, "", now))
+      .toContain("(Kontingent erschöpft)");
+  });
+
+  test("mit Fehler bleibt die Zahl, bekommt aber ihr Alter", () => {
+    const text = usage.barTooltip(report, "omp weg", now);
+    expect(text).toContain("omp: 60%");
+    expect(text).toContain("Stand vor 3m");
+    expect(text).toContain("Abruf fehlgeschlagen");
+  });
+
+  test("ohne Messung nur der Fehler bzw. der Titel", () => {
+    expect(usage.barTooltip(usage.parse("{}"), "omp weg", now)).toBe("omp: omp weg");
+    expect(usage.barTooltip(usage.parse("{}"), "", now)).toBe("omp-Kontingente");
   });
 });

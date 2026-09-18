@@ -139,6 +139,13 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   function. The meter carries `Behavior on color` alongside `Behavior on
   width`, otherwise a growing bar switches colour in one frame and reads as
   a rebuild.
+- Pure logic does not live in `Panel.qml`. `bun` cannot load QML and the QML
+  runtime has no assertions, so an inline expression there is unreachable
+  for every test. `Usage.js` therefore owns the settings clamps
+  (`refreshInterval`, `alarmFraction`), the ramp curve (`rampFactor`), and
+  the bar strings (`barText`, `barTooltip`); `Panel.qml` only binds. What
+  stays in QML is what needs QML: `mix()` (needs `Qt.rgba`), colour/theme
+  properties, and the fetch lifecycle.
 - Literal opacities are declared as properties (`metaOpacity`), not inlined;
   the `panel-hardcoding` rule flags bare values above 0.5.
 - Reactive clock: `nowMs` property + 30 s timer running only while

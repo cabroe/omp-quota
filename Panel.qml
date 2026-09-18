@@ -32,20 +32,13 @@ Panel {
   // Binding hier keine Abhängigkeit auf `settings` und behält nach der
   // Injektion durch den Bar-Host seinen Startwert. Direkter Zugriff macht
   // die Bindings reaktiv — so lesen die First-Party-Panels ihre Werte auch.
-  readonly property int refreshIntervalSec: {
-    var raw = settings ? settings.refreshIntervalSec : undefined
-    var value = Number(raw === undefined || raw === null ? 300 : raw)
-    return isFinite(value) ? Math.max(60, Math.min(3600, Math.round(value))) : 300
-  }
-  // Wer früh gewarnt werden will, darf das: die Untergrenze verhindert nur
-  // eine Schwelle von 0, die jedes Kontingent dauerhaft rot färben würde.
-  readonly property real alarmAt: {
-    var raw = settings ? settings.alarmThreshold : undefined
-    var value = Number(raw === undefined || raw === null ? 90 : raw)
-    if (!isFinite(value))
-      return 0.9
-    return Math.max(0.05, Math.min(1, value / 100))
-  }
+  //
+  // Die Klemmen selbst stehen in Usage.js: als Inline-Ausdruck hier waren
+  // sie von keinem Test erreichbar.
+  readonly property int refreshIntervalSec:
+    Usage.refreshInterval(settings ? settings.refreshIntervalSec : undefined, 300)
+  readonly property real alarmAt:
+    Usage.alarmFraction(settings ? settings.alarmThreshold : undefined, 90)
   readonly property bool redact: settings ? settings.redact === true : false
 
   // ------------------------------------------------------------------ Daten
@@ -144,38 +137,15 @@ Panel {
       1)
   }
 
-  readonly property string barLabel: {
-    if (hasError)
-      return glyph + " !"
-    if (!isFinite(worst) || worst < 0)
-      return glyph
-    // Eine vertikale Bar ist 28px breit — dort passt nur das Glyph.
-    if (bar && bar.vertical)
-      return glyph
-    return glyph + " " + Math.round(worst * 100) + "%"
-  }
-
-  readonly property string barTooltip: {
-    if (!isFinite(worst) || worst < 0)
-      return hasError ? "omp: " + errorText : "omp-Kontingente"
-    var text = "omp: " + Math.round(worst * 100) + "% — " + report.worstProvider + " · " + report.worstTitle
-    // Ein erschöpftes Kontingent ist die Ansage, nicht der Prozentwert: der
-    // steht bei 100 % und sagt nicht, dass gerade nichts mehr geht.
-    if (exhausted)
-      text += " (Kontingent erschöpft)"
-    // Mit Fehler daneben: die Zahl gilt weiter, sie ist nur nicht mehr neu.
-    return hasError ? text + " (Stand " + Usage.agoText(report.generatedAt, nowMs) + ", Abruf fehlgeschlagen)" : text
-  }
+  readonly property string barLabel:
+    Usage.barText(glyph, worst, hasError, bar && bar.vertical === true)
+  readonly property string barTooltip:
+    Usage.barTooltip(report, errorText, nowMs)
 
   // Jeder Balken ist eingefärbt, nicht erst der knappe: die Farbe wandert
   // mit dem Füllstand von `calm` nach `urgent` und erreicht `urgent` genau
-  // bei `alarmAt`. Drei harte Stufen waren die Vorstufe davon — sie ließen
-  // alles unter der Warnschwelle gleich aussehen, also die Mehrzahl der
-  // Zeilen.
-  //
-  // Der Exponent zieht den Farbverlauf nach hinten: die unteren zwei Drittel
-  // bleiben ruhig, die Färbung setzt dort ein, wo es eng wird. Linear wäre
-  // ein Fenster bei 45 % schon halb rot und die Skala damit wertlos.
+  // bei `alarmAt`. Die Kurve selbst steckt in `Usage.rampFactor()` — nur
+  // das Mischen zweier Farben braucht QML.
   //
   // Erschöpft ist immer Alarm, unabhängig vom Füllstand — `fraction` ist auf
   // 1 gedeckelt, ein überzogenes Kontingent sähe sonst aus wie ein gerade
@@ -187,11 +157,7 @@ Panel {
     var from = base === undefined ? root.calm : base
     if (exhausted === true)
       return root.urgent
-    if (!isFinite(fraction) || fraction < 0)
-      return from
-    if (fraction >= root.alarmAt)
-      return root.urgent
-    return root.mix(from, root.urgent, Math.pow(fraction / root.alarmAt, 2.2))
+    return root.mix(from, root.urgent, Usage.rampFactor(fraction, root.alarmAt))
   }
 
   // `fresh` verwirft zuerst omps Report-Cache, damit die Provider-APIs

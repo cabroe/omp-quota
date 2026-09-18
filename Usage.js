@@ -516,3 +516,85 @@ function agoText(timestamp, now) {
     return "vor " + hours + "h";
   return "vor " + Math.floor(hours / 24) + "d";
 }
+
+// ---------------------------------------------------------- Panel-Logik
+//
+// Was hier unten steht, saß vorher als Inline-Ausdruck in Panel.qml: dort
+// ist es von keinem Test erreichbar, weil `bun` kein QML lädt und die
+// QML-Runtime keine Assertions hat. Die Funktionen bleiben pur (Zeit und
+// Einstellungen kommen als Parameter), das Panel bindet nur noch.
+
+// Poll-Intervall aus dem rohen Setting. Untergrenze 60 s, weil ein Panel,
+// das jede Sekunde einen Prozess startet, die Provider-APIs rate-limitet;
+// Obergrenze 3600 s, damit ein Tippfehler nicht faktisch abschaltet.
+// Unbrauchbare Eingabe fällt auf den Default zurück, nicht auf 0.
+function refreshInterval(raw, fallbackSec) {
+  var fallback = num(fallbackSec);
+  if (!isFinite(fallback))
+    fallback = 300;
+  var value = num(raw === undefined ? null : raw);
+  if (!isFinite(value))
+    return clamp(Math.round(fallback), 60, 3600);
+  return clamp(Math.round(value), 60, 3600);
+}
+
+// Alarmschwelle in Prozent -> Anteil 0..1. Die Untergrenze verhindert eine
+// Schwelle von 0, die jedes Kontingent dauerhaft rot färben würde — und
+// mit der die Farbrampe durch Division durch 0 kippen würde.
+function alarmFraction(raw, fallbackPercent) {
+  var fallback = num(fallbackPercent);
+  if (!isFinite(fallback))
+    fallback = 90;
+  var value = num(raw === undefined ? null : raw);
+  if (!isFinite(value))
+    value = fallback;
+  return clamp(value / 100, 0.05, 1);
+}
+
+// Mischfaktor der Farbrampe: 0 bei leerem Kontingent, 1 ab der
+// Alarmschwelle. Der Exponent zieht die Färbung nach hinten — linear wäre
+// ein Fenster bei der halben Schwelle schon halb alarmfarben und die Skala
+// damit wertlos. Unbegrenzte Fenster (-1) und fehlende Angaben bleiben 0.
+function rampFactor(fraction, alarmAt) {
+  var value = num(fraction);
+  if (!isFinite(value) || value < 0)
+    return 0;
+  var threshold = num(alarmAt);
+  if (!isFinite(threshold) || threshold <= 0)
+    return 1;
+  if (value >= threshold)
+    return 1;
+  return Math.pow(value / threshold, 2.2);
+}
+
+// Bar-Beschriftung. Eine vertikale Bar ist 28 px breit — dort passt nur das
+// Glyph, der Prozentwert wäre abgeschnitten.
+function barText(glyph, worst, hasError, vertical) {
+  var mark = String(glyph || "");
+  if (hasError === true)
+    return mark + " !";
+  var value = num(worst);
+  if (!isFinite(value) || value < 0 || vertical === true)
+    return mark;
+  return mark + " " + Math.round(value * 100) + "%";
+}
+
+// Tooltip der Bar. Drei Aussagen, in dieser Reihenfolge: der Wert, ob das
+// Kontingent erschöpft ist (der Prozentwert steht bei 100 % und sagt nicht,
+// dass gerade nichts mehr geht), und ob die Zahl noch aktuell ist.
+function barTooltip(report, errorText, now) {
+  var data = report || {};
+  var error = String(errorText || "");
+  var worst = num(data.worst);
+  if (!isFinite(worst) || worst < 0)
+    return error.length > 0 ? "omp: " + error : "omp-Kontingente";
+
+  var text = "omp: " + Math.round(worst * 100) + "% — "
+    + String(data.worstProvider || "") + " · " + String(data.worstTitle || "");
+  if (data.exhausted === true)
+    text += " (Kontingent erschöpft)";
+  if (error.length === 0)
+    return text;
+  // Mit Fehler daneben: die Zahl gilt weiter, sie ist nur nicht mehr neu.
+  return text + " (Stand " + agoText(data.generatedAt, now) + ", Abruf fehlgeschlagen)";
+}
