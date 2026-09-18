@@ -156,6 +156,12 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   `barForeground`, `background`, `urgent`, `fontFamily`, `position`,
   `vertical`, `barSize` — and **no** `accent`. `calm` therefore reads
   `Color.accent` directly; a `bar.accent` fallback branch is dead code.
+- Typographic hierarchy in the popup, largest first: hero `display`,
+  provider name `body` + bold + full `foreground`, limit title `bodySmall`,
+  captions (detail, reset, meta, footer) `caption` + `dim`. The provider
+  name overrides `PanelSectionHeader`'s built-in `Qt.darker(…, 1.4)` and its
+  `caption` default on purpose — with them it was the smallest, faintest
+  text in its own section, below the rows it introduces.
 - Literal opacities are declared as properties (`metaOpacity`), not inlined;
   the `panel-hardcoding` rule flags bare values above 0.5.
 - Reactive clock: `nowMs` property + 30 s timer running only while

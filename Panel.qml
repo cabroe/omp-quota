@@ -608,6 +608,16 @@ Panel {
         text: providerBlock.provider ? providerBlock.provider.name : ""
         foreground: root.foreground
         fontFamily: root.fontFamily
+        // Der Provider ist die Überschrift seiner Zeilen, also muss er über
+        // ihnen stehen: `body` (12) gegen `bodySmall` (11) der Kontingent-
+        // titel. Mit dem Default `caption` (10) war er die kleinste Schrift
+        // im Abschnitt und damit optisch untergeordnet.
+        fontSize: Style.font.body
+        // PanelSectionHeader dunkelt intern um 1.4 ab — gedacht für ein
+        // kleines Label über einer Liste. Hier trägt die Zeile den Namen,
+        // nach dem man sucht, also volle Vordergrundfarbe. `font.bold` ist
+        // in der Komponente schon gesetzt.
+        color: root.foreground
       }
 
       Item {
