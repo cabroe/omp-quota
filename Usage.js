@@ -244,7 +244,7 @@ function byWindow(a, b) {
   var db = isFinite(b.durationMs) ? b.durationMs : Number.MAX_VALUE;
   if (da !== db)
     return da - db;
-  return a.title.localeCompare(b.title);
+  return a.title.localeCompare(b.title, "en");
 }
 
 // Planzeile. Nur `planType` ist eine Planangabe; `orgName` ist bei
@@ -337,7 +337,13 @@ function parse(raw) {
     return failed("Antwort von omp ist kein JSON");
   }
 
-  if (data && typeof data.error === "string" && data.error.length > 0)
+  // JSON.parse akzeptiert auch Primitive (null, 0, "x", true) und Arrays —
+  // ein Report ist aber immer ein Objekt. `null` würde unten bei
+  // data.generatedAt als TypeError crashen statt als Fehlerreport zu enden.
+  if (data === null || typeof data !== "object" || data instanceof Array)
+    return failed("Antwort von omp ist kein JSON-Objekt");
+
+  if (typeof data.error === "string" && data.error.length > 0)
     return failed(data.error);
 
   var reports = data && data.reports instanceof Array ? data.reports : [];
@@ -347,11 +353,13 @@ function parse(raw) {
     if (normalized.limits.length > 0)
       providers.push(normalized);
   }
-
   // Stabile Reihenfolge: nach Anzeigename. Ein Provider, der gerade nach
   // oben rutscht, weil sein Füllstand steigt, macht das Panel unlesbar.
+  // Explizites Locale: ohne das Argument sortiert localeCompare nach der
+  // Host-Locale, und dieselbe Providerliste stünde auf jeder Maschine
+  // anders — die Reihenfolge hier ist Teil des Vertrags.
   providers.sort(function (a, b) {
-    return a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name, "en");
   });
 
   var worst = -1;

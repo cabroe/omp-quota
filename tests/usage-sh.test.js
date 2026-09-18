@@ -77,7 +77,9 @@ beforeEach(() => {
   const isolated = join(root, "isolated");
   mkdirSync(isolated);
   mkdirSync(join(root, "home"));
-  for (const tool of ["sed", "mktemp", "rm", "timeout", "sleep"]) {
+  // head deckelt das stderr-Intake in usage.sh (OOM-Schutz) und muss darum
+  // wie die anderen coreutils im isolierten PATH liegen.
+  for (const tool of ["sed", "mktemp", "rm", "timeout", "sleep", "head", "tr"]) {
     symlinkSync(which(tool), join(isolated, tool));
   }
   // Fängt den letzten Zweig von find_omp ab: `mise which omp` würde sonst das
@@ -113,6 +115,18 @@ describe("usage.sh JSON-Garantie", () => {
     const parsed = jsonOk(stdout);
     expect(parsed.error).toContain("lieferte kein JSON-Objekt");
     expect(parsed.error).toContain("complete garbage");
+  });
+
+  test("riesiges stderr wird beim Einlesen gekappt, Fehler-JSON bleibt valide", async () => {
+    // 200 KB stderr: head -c 2000 in usage.sh verhindert, dass das Skript
+    // die ganze Datei in eine Shell-Variable slurpt (OOM bei Megabytes).
+    makeOmp(`head -c 200000 /dev/zero | tr '\\0' 'x' >&2; echo 'ANFANG-MELDUNG' >&2; exit 1`);
+    const { exitCode, stdout } = await runUsage();
+    expect(exitCode).toBe(1);
+    const parsed = jsonOk(stdout);
+    expect(parsed.error).toContain("fehlgeschlagen (exit 1)");
+    // Der Anfang der Meldung steht drin, der Bulk ist gekappt.
+    expect(parsed.error.length).toBeLessThan(600);
   });
 
   test("Exit != 0: Fehler-JSON mit Exit-Code und omp-stderr, Exit 1", async () => {

@@ -117,8 +117,13 @@ else
 fi
 status=$?
 
+# stderr-Intake auf die ersten Kilobytes deckeln: Ein hängendes omp kann
+# während des gesamten OMP_TIMEOUT Megabytes in die Datei schreiben, und das
+# ungefilterte Einlesen in eine Shell-Variable kann das Skript per OOM
+# abreißen lassen — das würde die JSON-Garantie selbst brechen. Die
+# 400-Zeichen-Kürzung in json_string() greift dafür zu spät.
 detail=""
-[[ -n $errfile ]] && detail=$(<"$errfile")
+[[ -n $errfile ]] && detail=$(head -c 2000 "$errfile" 2>/dev/null)
 
 if ((status == 124)); then
   emit_error "omp usage --json hat nach ${OMP_TIMEOUT} s nicht geantwortet"
@@ -136,6 +141,13 @@ fi
 
 # Guard against omp printing a banner or warning ahead of the payload: keep
 # everything from the first brace on, so a stray line cannot break JSON.parse.
+#
+# Bekannte Grenze: Das schneidet nur den Vorspann ab. Text NACH dem
+# JSON-Objekt (Trailing Garbage auf stdout) bliebe stehen und erreichte das
+# Panel als invalides JSON — Usage.parse baut daraus einen lesbaren Fehler
+# statt zu crashen. omp schreibt Warnungen auf stderr (landen in der
+# Fehlermeldung), also ist das eine dokumentierte Grenze, kein Bug, den ein
+# fragiler sed-Parser beheben sollte.
 payload=$(printf '%s' "$report" | sed -n '/^[[:space:]]*{/,$p')
 
 # Output without a brace anywhere was never a report, and the sed above cuts

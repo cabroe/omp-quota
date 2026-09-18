@@ -297,6 +297,17 @@ describe("parse", () => {
     expect(usage.parse("kein json").error.length).toBeGreaterThan(0);
   });
 
+  // JSON.parse akzeptiert Primitive — ein Report ist immer ein Objekt.
+  // `null` crashte vorher bei data.generatedAt mit TypeError.
+  test("JSON-Primitive statt Objekt: Fehler statt Crash", () => {
+    for (const input of ["null", "0", "123", '"x"', "true", "[]"]) {
+      const out = usage.parse(input);
+      expect(out.error).toBe("Antwort von omp ist kein JSON-Objekt");
+      expect(out.providers).toEqual([]);
+      expect(out.worst).toBe(-1);
+    }
+  });
+
   test("Fehlerreports haben dieselbe Form wie gute", () => {
     const out = usage.parse('{"error":"omp not found"}');
     expect(out.error).toBe("omp not found");

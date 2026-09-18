@@ -180,8 +180,14 @@ Panel {
 
     // Zwischen Start und Antwort hat der Bar-Host `redact` gesetzt. Dieser
     // Report zeigt dann die Konten, die verborgen werden sollen — also
-    // verwerfen und mit der aktuellen Einstellung neu holen.
+    // verwerfen und mit der aktuellen Einstellung neu holen. Die Queue wird
+    // dabei geleert: onRedactChanged hat genau diesen Nachzug längst als
+    // Anfrage gemerkt, und ihr Eintrag würde nach dem nächsten Prozessende
+    // noch einen zweiten, redundanten Abruf mit derselben Einstellung
+    // auslösen.
     if (root.requestRedact !== root.redact) {
+      root.queuedRefresh = false
+      root.queuedFresh = false
       root.refresh(false)
       return
     }

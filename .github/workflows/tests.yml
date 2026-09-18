@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Ein neuer Push auf denselben Branch macht den laufenden Lauf überflüssig.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -13,9 +18,12 @@ jobs:
   bun:
     name: bun test
     runs-on: ubuntu-latest
+    # Fängt hängende Runner ab — der Timeout-Fall der Suite dauert ~2 s,
+    # alles darüber deutet auf einen hängenden Prozess oder Runner hin.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version-file: .bun-version
       - run: bun test
