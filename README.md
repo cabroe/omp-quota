@@ -1,5 +1,7 @@
 # omp Kontingente
 
+[![tests](https://github.com/cabroe/omp-quota/actions/workflows/tests.yml/badge.svg)](https://github.com/cabroe/omp-quota/actions/workflows/tests.yml)
+
 Ein Bar-Widget und ein Popup für die Provider-Kontingente, die der
 [omp](https://github.com/can1357/oh-my-pi)-Agent verwaltet. Die Bar zeigt das
 knappste Kontingent über alle Provider, das Popup jedes einzelne Fenster mit
