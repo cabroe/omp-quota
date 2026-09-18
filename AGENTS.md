@@ -117,20 +117,28 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   spacer must subtract the identical value.
 - Reusable blocks are `component`s at file end (`ProviderSection`,
   `LimitRow`).
-- Fill colour is a three-step ramp through one function, `colorFor(fraction,
-  exhausted)`: neutral → `caution` → `urgent`, plus `urgent` whenever
-  `exhausted` (the fraction is capped at 1, so an overdrawn quota would
-  otherwise look merely full) and neutral for unlimited rows
-  (`fraction < 0`). `warnAt` is derived as `alarmAt - 0.15` (floor 0.05,
-  and always at least 0.05 below `alarmAt`) — never a second setting: a
-  slider that can cross the alarm threshold is a bug source without payoff.
-  `caution` is mixed from `foreground` and `urgent` (62 %), because the
-  palette ships only foreground/accent/urgent/muted and no warning hue;
-  a hard-coded amber would break in half the themes.
-- A limit row derives one `tone` and both the percent text and the meter
-  read it — they must never disagree. The meter carries `Behavior on color`
-  alongside `Behavior on width`, otherwise a growing bar switches step
-  colour in one frame and reads as a rebuild.
+- Every bar is tinted, not just the tight ones: `colorFor(fraction,
+  exhausted, base?)` interpolates `base` → `urgent` and reaches `urgent`
+  exactly at `alarmAt`. `exhausted` is always `urgent` regardless of fill
+  (the fraction is capped at 1, so an overdrawn quota would otherwise look
+  merely full); unlimited rows (`fraction < 0`) stay at `base`. The
+  exponent 2.2 pushes the colour to the back half — linear made a 45 %
+  window half red and the scale worthless. Three hard steps were the
+  predecessor; they left everything below the warn threshold looking
+  identical, which is most rows.
+- `base` differs by surface: meters start at `calm` (theme `accent`, so the
+  filled area separates from the labels), text starts at `foreground` (a
+  grey-tinted 3 % number is just harder to read). Both reach `urgent` in the
+  same instant, so area and number never disagree. No hard-coded amber — the
+  palette ships only foreground/accent/urgent/muted, and a theme like the
+  monochrome-red default has no warning hue to borrow.
+- Mix colours with the local `mix(from, to, t)`, never `Qt.tint()`: tint
+  composites over alpha, so a factor below 1 yields a translucent colour
+  instead of an intermediate one.
+- A limit row derives `tone` (meter) and `textTone` (percent) from that one
+  function. The meter carries `Behavior on color` alongside `Behavior on
+  width`, otherwise a growing bar switches colour in one frame and reads as
+  a rebuild.
 - Literal opacities are declared as properties (`metaOpacity`), not inlined;
   the `panel-hardcoding` rule flags bare values above 0.5.
 - Reactive clock: `nowMs` property + 30 s timer running only while

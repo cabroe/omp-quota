@@ -105,26 +105,23 @@ Panel {
   // Zugangsangabe in der Provider-Kopfzeile: nachrangig gegenüber dem
   // Namen, aber keine Fußnote — deshalb gedämpft statt `dim`.
   readonly property real metaOpacity: 0.75
-  // Vorwarnstufe: zwischen `warnAt` und `alarmAt` ist das Kontingent eng,
-  // aber noch nicht im Alarm. Vorher sprang die Farbe binär von
-  // `foreground` auf `urgent` — ein Fenster bei 88 % sah aus wie eines bei
-  // 12 %, und die Warnung kam erst, wenn kaum noch Luft war.
-  //
-  // Die Schwelle hängt an `alarmAt` statt an einem eigenen Setting: wer den
-  // Alarm nach vorn zieht, will auch früher gewarnt werden, und ein zweiter
-  // Regler, der über dem ersten liegen kann, ist eine Fehlerquelle ohne
-  // Gegenwert. Der Abstand bleibt mindestens 5 Punkte, sonst verschwindet
-  // das Band bei kleinen Schwellen ganz.
-  readonly property real warnAt: Math.max(0.05, Math.min(alarmAt - 0.05, alarmAt - 0.15))
-  // Theme-treu gemischt statt hart kodiert: die Paletten liefern nur
-  // foreground/accent/urgent/muted, kein Warngelb. Der Mittelwert liegt
-  // sichtbar neben beiden Enden und bleibt in jedem Theme lesbar, weil er
-  // aus genau den Farben besteht, die das Theme selbst gewählt hat.
-  readonly property color caution: Qt.rgba(
-    foreground.r + (urgent.r - foreground.r) * 0.62,
-    foreground.g + (urgent.g - foreground.g) * 0.62,
-    foreground.b + (urgent.b - foreground.b) * 0.62,
-    1)
+  // Basisfarbe eines noch leeren Balkens. `accent` statt `foreground`: der
+  // Balken ist eine Fläche, kein Text, und soll sich von der Beschriftung
+  // absetzen. Themes ohne eigenen Akzent liefern hier denselben Wert wie
+  // foreground — dann verhält sich die Rampe wie vorher, nur ohne Sprung.
+  readonly property color calm: bar && bar.accent ? bar.accent : Color.accent
+
+  // Mischt zwei Farben linear. Qt.tint() kann das nicht: es rechnet über
+  // Alpha-Komposition, und ein Faktor unter 1 ergäbe eine halbdurchsichtige
+  // Farbe statt einer Zwischenfarbe.
+  function mix(from, to, t) {
+    var k = t < 0 ? 0 : (t > 1 ? 1 : t)
+    return Qt.rgba(
+      from.r + (to.r - from.r) * k,
+      from.g + (to.g - from.g) * k,
+      from.b + (to.b - from.b) * k,
+      1)
+  }
 
   readonly property string barLabel: {
     if (hasError)
@@ -149,18 +146,31 @@ Panel {
     return hasError ? text + " (Stand " + Usage.agoText(report.generatedAt, nowMs) + ", Abruf fehlgeschlagen)" : text
   }
 
-  // Ein Füllstand, drei Stufen: normal, eng, Alarm. Erschöpft ist immer
-  // Alarm, unabhängig vom Füllstand — `fraction` ist auf 1 gedeckelt, ein
-  // überzogenes Kontingent sähe sonst aus wie ein gerade eben volles.
-  // Unbegrenzte Fenster (`fraction < 0`) bleiben neutral.
-  function colorFor(fraction, exhausted) {
+  // Jeder Balken ist eingefärbt, nicht erst der knappe: die Farbe wandert
+  // mit dem Füllstand von `calm` nach `urgent` und erreicht `urgent` genau
+  // bei `alarmAt`. Drei harte Stufen waren die Vorstufe davon — sie ließen
+  // alles unter der Warnschwelle gleich aussehen, also die Mehrzahl der
+  // Zeilen.
+  //
+  // Der Exponent zieht den Farbverlauf nach hinten: die unteren zwei Drittel
+  // bleiben ruhig, die Färbung setzt dort ein, wo es eng wird. Linear wäre
+  // ein Fenster bei 45 % schon halb rot und die Skala damit wertlos.
+  //
+  // Erschöpft ist immer Alarm, unabhängig vom Füllstand — `fraction` ist auf
+  // 1 gedeckelt, ein überzogenes Kontingent sähe sonst aus wie ein gerade
+  // eben volles. Unbegrenzte Fenster (`fraction < 0`) bleiben ruhig.
+  // `base` ist die Farbe bei leerem Kontingent: Flächen starten bei `calm`,
+  // Text bei `foreground` — ein grau angelaufener Prozentwert wäre bei 3 %
+  // schlechter lesbar, ohne etwas auszusagen.
+  function colorFor(fraction, exhausted, base) {
+    var from = base === undefined ? root.calm : base
     if (exhausted === true)
       return root.urgent
     if (!isFinite(fraction) || fraction < 0)
-      return root.foreground
+      return from
     if (fraction >= root.alarmAt)
       return root.urgent
-    return fraction >= root.warnAt ? root.caution : root.foreground
+    return root.mix(from, root.urgent, Math.pow(fraction / root.alarmAt, 2.2))
   }
 
   // `fresh` verwirft zuerst omps Report-Cache, damit die Provider-APIs
@@ -445,7 +455,7 @@ Panel {
                 text: root.glyph
                 // Fehler schlägt alles; sonst trägt das Glyph dieselbe
                 // Stufe wie das knappste Kontingent.
-                color: root.hasError ? root.urgent : root.colorFor(root.worst, root.exhausted)
+                color: root.hasError ? root.urgent : root.colorFor(root.worst, root.exhausted, root.foreground)
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
               }
@@ -645,8 +655,11 @@ Panel {
     // gerade eben volles.
     readonly property bool exhausted: limit ? limit.exhausted === true : false
     readonly property bool alarming: exhausted || (isFinite(fraction) && fraction >= root.alarmAt)
-    // Eine Farbe pro Zeile: Prozent und Meter dürfen nie auseinanderlaufen.
+    // Dieselbe Rampe für Fläche und Zahl, nur mit unterschiedlichem
+    // Startpunkt: beide erreichen `urgent` im selben Moment, driften also
+    // nie auseinander.
     readonly property color tone: root.colorFor(fraction, exhausted)
+    readonly property color textTone: root.colorFor(fraction, exhausted, root.foreground)
     readonly property string resetText: limit ? Usage.untilText(limit.resetsAt, root.nowMs) : ""
     // Status zuerst, dann der Absolutwert — letzterer nur, wo die Einheit
     // keine Prozent sind und der Prozentwert die Zahl verschweigt.
@@ -720,7 +733,7 @@ Panel {
         id: limitPercent
         textFormat: Text.PlainText
         text: limitRow.limit ? limitRow.limit.percentText : "—"
-        color: limitRow.tone
+        color: limitRow.textTone
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         font.bold: limitRow.alarming
