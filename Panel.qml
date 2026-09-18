@@ -444,6 +444,11 @@ Panel {
             }
           }
 
+          PanelSeparator {
+            foreground: root.foreground
+            visible: root.providerCount > 0
+          }
+
           Repeater {
             model: root.providerCount
 
@@ -454,11 +459,6 @@ Panel {
             }
           }
 
-          PanelSeparator {
-            foreground: root.foreground
-            visible: root.providerCount > 0
-          }
-
           // Zustand und Tastenkürzel in getrennten Zeilen, beide umbrechend.
           // Als eine Zeile mit `elide` fiel der Hinweis als erstes weg,
           // sobald ein geteiltes Konto oder ein Zähler dazukam — also genau
@@ -466,6 +466,10 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(2)
+            // Gleicher Kopfplatz wie bei den Provider-Abschnitten: Die
+            // Fußzeile löst sich so sichtbar vom letzten Provider, statt
+            // nur das content-spacing (12) von dessen Meter zu trennen.
+            topPadding: Style.space(12)
 
             Text {
               textFormat: Text.PlainText
@@ -521,13 +525,15 @@ Panel {
     }
 
     spacing: Style.space(8)
+    // Kopfplatz über jedem Provider: Die Lücke gehört zum Abschnitt selbst,
+    // nicht zum spacing des umgebenden content-Columns — das würde Hero,
+    // Fehlerkarte und Fußzeile im gleichen Maß auseinanderziehen. So ist der
+    // Gruppenabstand (~2× Zeilenabstand) nur dort, wo Gruppen wechseln, und
+    // das Raster innerhalb eines Providers bleibt eng.
+    topPadding: Style.space(12)
     // Während eines Abrufs, der Provider entfernt, kann der Index kurz ins
     // Leere zeigen.
     visible: providerBlock.provider !== null
-
-    PanelSeparator {
-      foreground: root.foreground
-    }
 
     Row {
       width: parent.width
@@ -664,7 +670,9 @@ Panel {
         id: limitReset
         textFormat: Text.PlainText
         text: limitRow.resetText
-        color: root.dim
+        // Bei erschöpftem Kontingent ist die Rückkehrzeit Teil der
+        // Alarmmeldung — sie gehört in die Alarmfarbe, nicht ins Grau.
+        color: limitRow.exhausted ? root.urgent : root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         rightPadding: text !== "" ? Style.space(8) : 0
@@ -682,8 +690,12 @@ Panel {
       }
     }
 
+    // Komplett ausblenden statt nur die Füllung: Ein leerer Track liest
+    // sich als 0 % verbraucht — bei einem unbegrenzten Fenster (fraction
+    // -1) ist die Zeile ohne Meter ehrlicher, das "∞" trägt die Aussage.
     Item {
       width: parent.width
+      visible: limitRow.fraction >= 0
       implicitHeight: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
 
       Rectangle {
