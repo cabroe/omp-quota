@@ -3,9 +3,15 @@
 // gleiche defaultValue, min/max wo relevant).
 import { describe, test, expect } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+// tests/ liegt im Plugin-Wurzelverzeichnis; das Wurzelverzeichnis ist der
+// Großeltern-Pfad dieser Datei. Über dirname(fileURLToPath(...)) statt
+// `new URL("..", import.meta.url).pathname`: Letzteres liefert je nach
+// Plattform einen Pfad mit oder ohne Trailing-Slash, was `basename()`
+// hier kippt.
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(readFileSync(join(ROOT, "manifest.json"), "utf8"));
 
 describe("manifest.json Identität", () => {
