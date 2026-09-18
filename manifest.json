@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "cabroe.omp-quota",
+  "name": "omp Kontingente",
+  "version": "1.0.0",
+  "author": "cabroe",
+  "license": "MIT",
+  "description": "Provider-Kontingente des omp-Agents in der Omarchy-Bar: knappstes Fenster als Zahl, alle Fenster mit Füllstand und Reset-Zeit im Popup.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "omp Kontingente",
+    "description": "Ein Bar-Wert und ein Popup: Füllstand, Reset-Countdown und Plan für jedes Kontingent, das omp bei Anthropic, Z.ai, Google Antigravity, MiniMax und OpenAI Codex kennt.",
+    "category": "AI",
+    "aliases": [
+      "omp",
+      "omp-quota",
+      "quotas"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "alarmThreshold": 90,
+      "redact": false
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Aktualisierung (Sekunden)",
+        "min": 60,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300,
+        "description": "Wie oft omp nach neuen Nutzungsdaten gefragt wird."
+      },
+      {
+        "key": "alarmThreshold",
+        "type": "integer",
+        "label": "Warnschwelle (Prozent)",
+        "min": 5,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 90,
+        "description": "Ab diesem Füllstand färbt sich Wert und Meter in der Warnfarbe."
+      },
+      {
+        "key": "redact",
+        "type": "boolean",
+        "label": "Konten verbergen",
+        "defaultValue": false,
+        "description": "Ruft omp mit --redact auf, damit E-Mail-Adressen und Konto-IDs für Screenshots gekürzt werden."
+      }
+    ]
+  }
+}
