@@ -11,7 +11,9 @@ Für **neue Provider** ist `skill://omp-quota-provider` zuständig, nicht diese 
 ```
 usage.sh ──► stdout JSON ──► Usage.js: parse() ──► Panel.qml (bindet)
    ▲                 └──► Providers.js: resolve(id) ──► providers/*.js
-refresh()
+refresh() (poll / Popup-Öffnen / r / R / f / Rechts- / Mittelklick)
+refreshHistory() (nur Popup-Öffnen) ──► Usage.js: parseHistory()  → Verbrauch
+refreshStats()  (nur Popup-Öffnen) ──► Usage.js: parseStats()    → Analyse
 ```
 
 ## 1. Die Regel, die alles andere erklärt
@@ -78,10 +80,10 @@ omarchy bar set cabroe.omp-quota redact true --json
   SIGKILL trifft bash, den einzigen Halter der stdout-Pipe — erst dann feuert
   `finished` und die Queue zieht nach.
 - **Der Verlaufsabruf ist ein eigener `Process` (`historyProcess`)** mit
-  eigenem Watchdog, gestartet nur beim Popup-Öffnen. Fehlgeschlagene
-  Verläufe still verwerfen — die Sparkline ist Zutat, die Fehlerkarte
-  gehört dem Live-Abruf. **`statsProcess` ist die dritte Kopie des
-  Musters** (Verbrauchs-Ansicht, Tastenkürzel `v`), dieselbe stille
+  eigenem Watchdog, gestartet nur beim Popup-Öffnen (Verbrauchs-Ansicht).
+  Fehlgeschlagene Verläufe still verwerfen — die Sparkline ist Zutat, die
+  Fehlerkarte gehört dem Live-Abruf. **`statsProcess` ist die dritte Kopie
+  des Musters** (Analyse-Ansicht — Session-Statistik), dieselbe stille
   Degradation.
 
 ## 4. Layout und Farben
@@ -118,7 +120,7 @@ omarchy bar set cabroe.omp-quota redact true --json
   auf (Verlaufssnapshots für die Sparklines, DB-Lese statt API-Rundtrip);
   `--fresh`/`invalidate` ist im Verlaufsmodus bedeutungslos und wird nicht
   ausgeführt. Mit `stats` ruft es `omp stats --json` auf (Session-Statistik
-  der letzten 24 h für die Verbrauchs-Ansicht; die Präambel "Synced …"
+  der letzten 24 h für die Analyse-Ansicht; die Präambel "Synced …"
   schneidet die bestehende Sed-Pipeline ab). Alle Guards und die
   JSON-Garantie gelten in allen drei Modi unverändert.
 - **stdout ist immer ein JSON-Objekt**, auch im Fehlerfall (`{"error": "..."}`

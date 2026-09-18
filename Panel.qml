@@ -369,8 +369,8 @@ Panel {
       // dem letzten Öffnen reicht dafür. Ein laufender Verlaufsabruf wird
       // nicht doppelt gestartet (refreshHistory guardt selbst).
       refreshHistory()
-      // Dasselbe für die Verbrauchszahlen — der Umschalter soll sofort
-      // etwas zeigen, wenn er benutzt wird.
+      // Dasselbe für die Statistik — der Umschalter soll sofort etwas
+      // zeigen, wenn er benutzt wird.
       refreshStats()
     }
   }
@@ -429,7 +429,7 @@ Panel {
     }
   }
 
-  // Verbrauchsabruf: drittes Exemplar desselben Musters. Eigenständig vom
+  // Statistik-Abruf: drittes Exemplar desselben Musters. Eigenständig vom
   // Live-Poll und vom Verlauf — ein Hänger in einer Quelle darf die
   // anderen zwei nicht blockieren.
   Process {
@@ -614,7 +614,7 @@ Panel {
             }
           }
 
-          // Umschalter zwischen Kontingente, Analyse und Verbrauch. Die
+          // Umschalter zwischen Kontingente, Verbrauch und Analyse. Die
           // Datensätze liegen beim Öffnen bereits vor — der Wechsel ist
           // rein lokal, kein Abruf. Bleibt stehen, wenn der Live-Abruf
           // fehlschlägt: die Fehlerkarte gehört zur Kontingent-Ansicht.
@@ -654,9 +654,15 @@ Panel {
             }
           }
 
+          // Die Trennlinie gehört zur Ansicht, nicht zum Block: In allen
+          // drei Ansichten steht sie direkt unter Tabs bzw. Fehlerkarte,
+          // und der Abstand zur folgenden Überschrift ist überall derselbe
+          // — content-spacing 12 plus topPadding 12 des Blocks darunter.
+          // In der Kontingent-Ansicht nur mit Providern: ohne bliebe die
+          // Linie das Letzte im Popup.
           PanelSeparator {
             foreground: root.foreground
-            visible: root.providerCount > 0 && root.activeView === 0
+            visible: root.activeView !== 0 || root.providerCount > 0
           }
 
           Repeater {
@@ -676,22 +682,20 @@ Panel {
           // als Textzeilen — keine Meter, es gibt keinen Füllstand, den
           // eine Rampe deuten könnte. Kosten in Vordergrundfarbe, Abo-
           // Modelle (0 $) im Grau. Dasselbe Design wie die Kontingent-
-          // Abschnitte: Trennlinie, Kopfzeile (Titel links, Meta rechts)
-          // und dieselbe Rhythmik (topPadding 12 / innen 8 / bottom 8).
+          // Abschnitte: Kopfzeile (Titel links, Meta rechts) und dieselbe
+          // Rhythmik (topPadding 12 / innen 8 / bottom 8) — die Trenn-
+          // linie darüber liegt auf Ansichtsebene.
           Column {
             id: statsView
             width: parent.width
             visible: root.activeView === 2
             spacing: Style.space(8)
+            topPadding: Style.space(12)
             bottomPadding: Style.space(8)
 
             readonly property var stats: root.statsData
             readonly property int modelCount: stats && stats.models instanceof Array ? stats.models.length : 0
 
-            PanelSeparator {
-              width: parent.width
-              foreground: root.foreground
-            }
 
             Row {
               width: parent.width
@@ -712,7 +716,7 @@ Panel {
 
               PanelSectionHeader {
                 id: statsMeta
-                text: "letzte 24 h · omp-Sessionstatistik"
+                text: "letzte 24 Stunden · Sessionstatistik"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 font.bold: false
@@ -720,6 +724,16 @@ Panel {
                 elide: Text.ElideRight
                 width: Math.min(implicitWidth, parent.width * 0.6)
               }
+            }
+
+            Text {
+              width: parent.width
+              visible: statsView.stats === null
+              textFormat: Text.PlainText
+              text: root.statsPending ? "wird geladen" : "keine Statistikdaten"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
             }
 
             Text {
@@ -814,29 +828,22 @@ Panel {
               }
             }
 
-            Text {
-              width: parent.width
-              visible: statsView.stats === null
-              textFormat: Text.PlainText
-              text: root.statsPending ? "wird geladen" : "keine Verbrauchsdaten"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
           }
 
           // Verbrauchs-Ansicht: die drei meist verbrauchten Provider, je
           // einer mit vergrößerter Sparkline und Kennzahlen (Ø, Spitze,
           // Anzahl Stundenwerte). Das Ranking liefert topConsumers() — je
           // Provider sein schlimmstes Fenster, nie ein Provider doppelt.
-          // Dasselbe Design wie die Kontingent-Abschnitte: Trennlinie,
-          // Kopfzeile (Titel links, Meta rechts) und dieselbe Rhythmik
-          // (topPadding 12 / innen 8 / bottom 8).
+          // Dasselbe Design wie die Kontingent-Abschnitte: Kopfzeile
+          // (Titel links, Meta rechts) und dieselbe Rhythmik (topPadding
+          // 12 / innen 8 / bottom 8) — die Trennlinie darüber liegt auf
+          // Ansichtsebene.
           Column {
             id: historyView
             width: parent.width
             visible: root.activeView === 1
             spacing: Style.space(8)
+            topPadding: Style.space(12)
             bottomPadding: Style.space(8)
 
             readonly property int topCount: 3
@@ -848,10 +855,6 @@ Panel {
               return position >= 0 && position < list.length ? list[position] : null
             }
 
-            PanelSeparator {
-              width: parent.width
-              foreground: root.foreground
-            }
 
             Row {
               width: parent.width

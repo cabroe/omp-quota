@@ -780,7 +780,7 @@ function topConsumers(providers, series, count) {
   return out.length > take ? out.slice(0, take) : out;
 }
 
-// ---------------------------------------------------------- Verbrauchsdaten
+// ---------------------------------------------------------- Statistikdaten
 //
 // `usage.sh stats` liefert omps Session-Statistik (letzte 24 h, omps
 // eigener Default). Hier wird daraus eine kompakte Ansicht: ein Gesamt-

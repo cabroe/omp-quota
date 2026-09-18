@@ -19,8 +19,9 @@ subscriptions and queries the providers.
 
 **In the bar**: a gauge icon plus your tightest value across all providers,
 e.g. `57%`. That means the subscription closest to its limit is 57 % used.
-From 90 % on (configurable) the number switches to the warning colour, and
-the tooltip tells you which subscription it is.
+From 0 % on, number and bar tint continuously toward the warning colour,
+reaching it exactly at the threshold (90 % by default), and the tooltip
+tells you which subscription it is.
 
 **In the popup**: every provider with its limits. The header switches
 between three views — **Kontingente** (quotas), **Verbrauch** (history)
@@ -128,13 +129,16 @@ strings and get ignored.
 ## Development
 
 ```bash
-bun test              # normalisation, provider registry, usage.sh
-omarchy restart shell # required after every change — saving a file is not enough
+bun test                  # normalisation, provider registry, usage.sh, manifest, analyzer
+bun scripts/analyze.js    # static rules beyond the tests; exit 0 = clean
+omarchy restart shell     # required after every change — saving a file is not enough
 ```
 
-How it fits together: `usage.sh` calls `omp usage --json`, `Usage.js` turns
-the response into what the popup renders, `Panel.qml` draws it. Everything
-provider-specific lives in `providers/` alone, merged by `Providers.js`.
+How it fits together: `usage.sh` calls `omp usage --json` (plus
+`--history --days 7` and `omp stats --json` for the Verbrauch and Analyse
+views), `Usage.js` turns the responses into what the popup renders,
+`Panel.qml` draws it. Everything provider-specific lives in `providers/`
+alone, merged by `Providers.js`.
 
 ### Adding a provider
 

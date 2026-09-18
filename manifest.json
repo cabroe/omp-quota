@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "cabroe.omp-quota",
   "name": "omp Kontingente",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "cabroe",
   "license": "MIT",
-  "description": "Provider-Kontingente des omp-Agents in der Omarchy-Bar: knappstes Fenster als Zahl, im Popup alle Fenster mit Füllstand, Reset-Zeit und Verlaufs-Sparkline — umschaltbar auf Analyse (Anfragen, Tokens, Kosten) und Verbrauch (Verlauf je Fenster).",
+  "description": "Provider-Kontingente des omp-Agents in der Omarchy-Bar: knappstes Fenster als Zahl, im Popup alle Fenster mit Füllstand und Reset-Zeit — umschaltbar auf Verbrauch (Verlauf je Fenster als Sparkline) und Analyse (Anfragen, Tokens, Kosten).",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "omp Kontingente",
-    "description": "Ein Bar-Wert und ein umschaltbares Popup — Kontingente (Füllstand, Reset-Countdown, Verlaufs-Sparkline), Analyse (Anfragen, Tokens, Kosten je Modell) oder Verbrauch (Verlaufskurven je Fenster) — für alles, was omp bei Anthropic, Z.ai, Google Antigravity, MiniMax Code, OpenAI Codex, OpenRouter und GitHub Copilot kennt.",
+    "description": "Ein Bar-Wert und ein umschaltbares Popup — Kontingente (Füllstand, Reset-Countdown), Verbrauch (Verlaufskurven je Fenster) oder Analyse (Anfragen, Tokens, Kosten je Modell) — für alles, was omp bei Anthropic, Z.ai, Google Antigravity, MiniMax Code, OpenAI Codex, OpenRouter und GitHub Copilot kennt.",
     "category": "AI",
     "aliases": [
       "omp",

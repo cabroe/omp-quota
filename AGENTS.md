@@ -46,14 +46,15 @@ refreshStats() (popup open only) ──► Usage.js: parseStats()
    alphabetically, limits per provider by `durationMs` ascending, each with
    title + status/amount + reset countdown + percent + animated meter.
    The popup header switches between three views (mouse or `v` key
-   cycling): "Kontingente" (the limit rows), "Analyse" (stats view:
-   requests/errors/tokens/cache, today's cost and per-model rows sorted by
-   cost) and "Verbrauch" (the top three providers, one row each — never a
-   provider twice: `Usage.topConsumers()` takes every provider's worst
-   window (≥ 2 recorded points, ranked by peak, ties by average) and ranks
-   the providers by that peak — each row with a large 26-bucket sparkline,
-   plus `Usage.historySummary()` — average, peak, snapshot count, last
-   snapshot age). Tab order: Kontingente, Verbrauch, Analyse.
+   cycling): "Kontingente" (the limit rows), "Verbrauch" (the top three
+   providers, one row each — never a provider twice:
+   `Usage.topConsumers()` takes every provider's worst window
+   (≥ 2 recorded points, ranked by peak, ties by average) and ranks
+   the providers by that peak — each row with a large 26-bucket
+   sparkline, plus `Usage.historySummary()` — average, peak, snapshot
+   count, last snapshot age) and "Analyse" (stats view:
+   requests/errors/tokens/cache, today's cost and per-model rows sorted
+   by cost). Tab order: Kontingente, Verbrauch, Analyse.
    `activeView` (0/1/2) survives close; both fetches run on
    open so switching is instant.
 6. **Fetch lifecycle** (`Panel.qml`): a request arriving while a fetch runs
@@ -142,7 +143,10 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   spacer must subtract the identical value.
 - Group spacing belongs to the block, not to the surrounding `content`
   spacing: `ProviderSection` and the footer carry their own `topPadding`,
-  and `ProviderSection` additionally a `bottomPadding`. Raising
+  and `ProviderSection` additionally a `bottomPadding`. The Verbrauch and
+  Analyse views follow the exact same rhythm (topPadding 12 / spacing 8 /
+  bottomPadding 8); their separator sits at view level under the tabs, so
+  the line-to-heading gap is identical in all three views. Raising
   `content.spacing` instead would pull hero, error card and footer apart by
   the same amount, and a larger `topPadding` alone would leave the last
   provider glued to the footer while every other block has air.

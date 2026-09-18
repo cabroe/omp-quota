@@ -15,7 +15,7 @@
 # Ohne Argument der Live-Report. Mit `history` stattdessen omps stündliche
 # Verlaufssnapshots (`--history --days 7`) — Grundlage der Sparklines im
 # Popup. Mit `stats` die Session-Statistik (`omp stats --json`, letzte
-# 24 h) für die Verbrauchs-Ansicht. Alle Modi teilen sich Guards und
+# 24 h) für die Analyse-Ansicht. Alle Modi teilen sich Guards und
 # JSON-Garantie.
 
 set -o pipefail
@@ -136,7 +136,7 @@ if [[ $mode == history ]]; then
   # Live-Cache opfern, von dem der Trendmodus nichts erbt.
   args=(usage --json --history --days 7)
 elif [[ $mode == stats ]]; then
-  # Verbrauchsmodus: omps Session-Statistik der letzten 24 h (omps eigener
+  # Statistikmodus: omps Session-Statistik der letzten 24 h (omps eigener
   # Default), inkl. der Präambel-Zeile "Synced ...", die die Sed-Pipeline
   # unten ohnehin abschneidet. --redact hat hier nichts zu verbergen und
   # --fresh keinen Cache, den es lohnte zu leeren.
