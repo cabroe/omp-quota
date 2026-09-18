@@ -28,9 +28,17 @@
 //
 // Exit-Code: 0 = keine Befunde, 1 = mindestens ein Befund, 2 = Aufruffehler.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// Wurzel DIESES Skripts (nicht die des analysierten Repos): von hier kommt
+// der QML-Library-Loader, mit dem wir Providers.js wirklich auswerten statt
+// die Ableitungslogik (fallbackName/stripTokens) im Analyzer zu duplizieren.
+const SCRIPT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const { load: loadQmlLibrary } = await import(
+  join(SCRIPT_ROOT, "tests", "load.js")
+);
 
 // ---------- CLI -----------------------------------------------------------
 
@@ -360,6 +368,128 @@ function checkManifestBindings(root, addFinding) {
   }
 }
 
+// ---------- Regel 6: Provider-Abdeckung ----------------------------------
+
+// Die Frage, die das Repo beantwortet haben muss: Für welche Provider ist
+// ein Plugin gerechtfertigt? Genau zwei Gründe zählen (AGENTS.md, SKILL.md
+// Abschnitt 1): abweichende Schreibweise oder ein Phantom-Fenster. Ein
+// Plugin, das nur den ableitbaren Namen wiederholt, ist tote Konfiguration
+// — bisher stand das als Regel nur in der Doku und wurde nirgends geprüft.
+//
+// Die Ableitung wird nicht nachgebaut, sondern über den Test-Loader aus dem
+// echten Providers.js gezogen: fallbackName() ist die einzige Wahrheit.
+function checkProviderCoverage(root, addFinding) {
+  let registry;
+  try {
+    registry = loadQmlLibrary(join(root, "Providers.js"), [
+      "PLUGINS",
+      "fallbackName",
+    ]);
+  } catch (err) {
+    addFinding("provider-coverage", SEVERITY.error,
+      `Providers.js nicht auswertbar: ${err.message}`, "Providers.js");
+    return;
+  }
+
+  // Ein Providers.js ohne diese beiden Exporte ist selbst der Befund: der
+  // Kern ruft resolve()/fallbackName() unbedingt auf.
+  if (!Array.isArray(registry.PLUGINS) || typeof registry.fallbackName !== "function") {
+    addFinding("provider-coverage", SEVERITY.error,
+      "Providers.js exportiert PLUGINS und/oder fallbackName() nicht",
+      "Providers.js");
+    return;
+  }
+
+  let testSrc = "";
+  try {
+    testSrc = readText(join(root, "tests", "providers.test.js"));
+  } catch {
+    addFinding("provider-coverage", SEVERITY.warn,
+      "tests/providers.test.js fehlt — Provider-Abdeckung nicht belegbar",
+      "tests/providers.test.js");
+  }
+
+  for (const plugin of registry.PLUGINS) {
+    const id = String(plugin && plugin.id ? plugin.id : "");
+    if (id === "") continue; // plugin-discipline meldet das bereits
+    const derived = registry.fallbackName(id);
+    const windows = plugin.unlimitedWindows instanceof Array
+      ? plugin.unlimitedWindows
+      : [];
+    // Rechtfertigung: Schreibweise ODER Phantom-Fenster. Keines von beiden
+    // heißt: resolve(id) liefert ohne diese Datei dasselbe Ergebnis.
+    if (plugin.name === derived && windows.length === 0) {
+      addFinding("provider-coverage", SEVERITY.error,
+        `Plugin "${id}" wiederholt nur den ableitbaren Namen "${derived}" und hat keine unlimitedWindows — ohne Datei identisch`,
+        `providers/ (id: ${id})`);
+    }
+    // Jedes Plugin muss im Provider-Test belegt sein, sonst ist die
+    // Schreibweise nur behauptet (SKILL.md Abschnitt 6).
+    if (testSrc !== "" && !testSrc.includes(`"${id}"`) && !testSrc.includes(`${id}:`)) {
+      addFinding("provider-coverage", SEVERITY.warn,
+        `Plugin "${id}" ist in tests/providers.test.js nicht belegt`,
+        "tests/providers.test.js");
+    }
+  }
+}
+
+// ---------- Regel 7: Skill-Drift -----------------------------------------
+
+// Die Projekt-Skill ist die Anleitung, nach der ein Provider angelegt wird.
+// Sie nennt API-Namen in Backticks (`resolve(`, `stripTokens(`, …). Wird
+// eine dieser Funktionen umbenannt, zeigt die Skill auf nichts mehr und
+// führt den nächsten Durchgang in die Irre — das fängt kein Test ab.
+function checkSkillDrift(root, addFinding) {
+  const skillPath = join(root, ".omp", "skills", "omp-quota-provider", "SKILL.md");
+  if (!existsSync(skillPath)) {
+    addFinding("skill", SEVERITY.error,
+      "Projekt-Skill .omp/skills/omp-quota-provider/SKILL.md fehlt — die Provider-Anleitung ist Teil des Vertrags",
+      ".omp/skills/omp-quota-provider/SKILL.md");
+    return;
+  }
+  const skill = readText(skillPath);
+
+  // Frontmatter: ohne name/description ist die Skill nicht auffindbar.
+  if (!/^---\r?\n[\s\S]*?\bname:\s*omp-quota-provider\b[\s\S]*?^---/m.test(skill)) {
+    addFinding("skill", SEVERITY.error,
+      "Frontmatter ohne `name: omp-quota-provider` — Discovery greift nicht",
+      "SKILL.md");
+  }
+  if (!/\bdescription:\s*\S/.test(skill)) {
+    addFinding("skill", SEVERITY.error,
+      "Frontmatter ohne `description` — Discovery greift nicht", "SKILL.md");
+  }
+
+  // API-Namen aus Inline-Code der Form `name(` gegen die echten
+  // Top-Level-Deklarationen in Providers.js und Usage.js halten.
+  let sources = "";
+  for (const rel of ["Providers.js", "Usage.js"]) {
+    try {
+      sources += readText(join(root, rel)) + "\n";
+    } catch {
+      // Fehlende Kerndatei melden andere Regeln.
+    }
+  }
+  if (sources === "") return;
+  const named = new Set();
+  for (const m of skill.matchAll(/`([A-Za-z_$][\w$]*)\(/g)) named.add(m[1]);
+  for (const name of named) {
+    const declared = new RegExp(`^(?:var|function)\\s+${name}\\b`, "m");
+    if (!declared.test(sources)) {
+      addFinding("skill", SEVERITY.error,
+        `SKILL.md nennt \`${name}()\`, aber weder Providers.js noch Usage.js deklarieren das`,
+        "SKILL.md");
+    }
+  }
+
+  // Das Feld, um das sich Abschnitt 4 dreht, muss im Kern noch existieren.
+  if (!/\bunlimitedWindows\b/.test(sources)) {
+    addFinding("skill", SEVERITY.error,
+      "SKILL.md erklärt `unlimitedWindows`, der Kern kennt das Feld nicht mehr",
+      "SKILL.md");
+  }
+}
+
 // ---------- Run -----------------------------------------------------------
 
 function analyze(root) {
@@ -372,6 +502,8 @@ function analyze(root) {
   checkPanelHardcoding(root, addFinding);
   checkUsageSh(root, addFinding);
   checkManifestBindings(root, addFinding);
+  checkProviderCoverage(root, addFinding);
+  checkSkillDrift(root, addFinding);
   return findings;
 }
 

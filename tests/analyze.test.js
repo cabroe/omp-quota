@@ -37,9 +37,6 @@ async function runAnalyzer(root) {
       "Analyzer lieferte kein JSON. exit=" + exit + " stderr=\n" + err + "\nstdout=\n" + out,
     );
   }
-  // Diagnostik: bei fehlgeschlagenen expect() zeigen, was wir wirklich
-  // bekommen haben — der Test meldet nur "expected false" ohne Details.
-  parsed._debug = { exit, stderr: err };
   return { parsed, exit };
 }
 
@@ -125,7 +122,6 @@ describe("analyze.js: Provider-Registry", () => {
     });
 
     const { parsed } = await runAnalyzer(root);
-    console.log(JSON.stringify(parsed, null, 2));
     expect(byRule(parsed.findings, "provider-registry").some((f) =>
       f.message.includes("Missing.js"),
     )).toBe(true);
@@ -265,6 +261,142 @@ describe("analyze.js: Manifest-Bindings", () => {
     const { parsed } = await runAnalyzer(root);
     expect(byRule(parsed.findings, "manifest-bindings").some((f) =>
       f.message.includes("orphan"),
+    )).toBe(true);
+  });
+});
+
+// Basis-Layout für die Abdeckungs-/Skill-Regeln: gültiges Providers.js mit
+// echter Ableitung, damit nur der jeweils geprüfte Verstoß übrig bleibt.
+function registryFixture(plugins) {
+  const files = plugins.map((p) => p.file);
+  return {
+    "Providers.js":
+      `.pragma library\n\n` +
+      files.map((f) => `.import "providers/${f}" as ${f.replace(".js", "")}Plugin`).join("\n") +
+      `\n\nvar PLUGINS = [\n` +
+      files.map((f) => `  ${f.replace(".js", "")}Plugin.descriptor`).join(",\n") +
+      `\n];\n\n` +
+      `function fallbackName(id) {\n` +
+      `  var parts = String(id == null ? "" : id).split(/[-_.]/);\n` +
+      `  var out = [];\n` +
+      `  for (var i = 0; i < parts.length; i++) {\n` +
+      `    if (parts[i].length === 0) continue;\n` +
+      `    out.push(parts[i].charAt(0).toUpperCase() + parts[i].slice(1));\n` +
+      `  }\n` +
+      `  return out.length > 0 ? out.join(" ") : "Unbekannt";\n` +
+      `}\n`,
+    "Panel.qml": `import QtQuick\nItem {}\n`,
+    "usage.sh": `#!/bin/bash\nset -o pipefail\nOMP=$(command -v omp)\nrun_omp() { "$OMP" "$@"; }\nrun_omp usage --json\n`,
+    "manifest.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "t",
+      kinds: ["bar-widget"],
+      entryPoints: { barWidget: "Panel.qml" },
+      barWidget: {
+        defaultSection: "right",
+        allowMultiple: false,
+        defaults: {},
+        schema: [],
+      },
+    }),
+    ...Object.fromEntries(plugins.map((p) => [`providers/${p.file}`, p.source])),
+  };
+}
+
+describe("analyze.js: Provider-Abdeckung", () => {
+  test("Plugin, das nur den ableitbaren Namen wiederholt, ist ein Fehler", async () => {
+    writeTree(root, registryFixture([
+      {
+        file: "Anthropic.js",
+        // fallbackName("anthropic") === "Anthropic" und keine
+        // unlimitedWindows: die Datei ändert nichts an resolve().
+        source: `.pragma library\nvar descriptor = { id: "anthropic", name: "Anthropic" };\n`,
+      },
+    ]));
+
+    const { parsed, exit } = await runAnalyzer(root);
+    const cov = byRule(parsed.findings, "provider-coverage");
+    expect(cov.some((f) => f.message.includes("anthropic"))).toBe(true);
+    expect(exit).toBe(1);
+  });
+
+  test("abweichende Schreibweise rechtfertigt das Plugin", async () => {
+    writeTree(root, registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]));
+
+    const { parsed } = await runAnalyzer(root);
+    const cov = byRule(parsed.findings, "provider-coverage");
+    expect(cov.some((f) => f.message.includes("wiederholt"))).toBe(false);
+  });
+
+  test("Phantom-Fenster rechtfertigt das Plugin auch bei ableitbarem Namen", async () => {
+    writeTree(root, registryFixture([
+      {
+        file: "Phantom.js",
+        source: `.pragma library\nvar descriptor = { id: "phantom", name: "Phantom", unlimitedWindows: ["7d"] };\n`,
+      },
+    ]));
+
+    const { parsed } = await runAnalyzer(root);
+    expect(byRule(parsed.findings, "provider-coverage").some((f) =>
+      f.message.includes("wiederholt"),
+    )).toBe(false);
+  });
+});
+
+describe("analyze.js: Skill", () => {
+  test("fehlende Projekt-Skill wird gemeldet", async () => {
+    writeTree(root, registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]));
+
+    const { parsed } = await runAnalyzer(root);
+    expect(byRule(parsed.findings, "skill").some((f) =>
+      f.message.includes("fehlt"),
+    )).toBe(true);
+  });
+
+  test("Skill, die eine nicht existierende Funktion nennt, wird gemeldet", async () => {
+    const tree = registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]);
+    tree["Usage.js"] = `.pragma library\nfunction parse(raw) { return null; }\nvar unlimitedWindows = 1;\n`;
+    tree[".omp/skills/omp-quota-provider/SKILL.md"] =
+      `---\nname: omp-quota-provider\ndescription: "x"\n---\n\n` +
+      "Ruf `resolve(` und `weggefallen(` auf.\n";
+    writeTree(root, tree);
+
+    const { parsed } = await runAnalyzer(root);
+    const skill = byRule(parsed.findings, "skill");
+    expect(skill.some((f) => f.message.includes("weggefallen"))).toBe(true);
+    // `resolve` existiert in diesem Fixture nicht als Deklaration ... doch:
+    // Providers.js deklariert es nicht, also muss auch das auffallen.
+    expect(skill.some((f) => f.message.includes("resolve"))).toBe(true);
+  });
+
+  test("Skill ohne Frontmatter-Namen wird gemeldet", async () => {
+    const tree = registryFixture([
+      {
+        file: "Zai.js",
+        source: `.pragma library\nvar descriptor = { id: "zai", name: "Z.ai" };\n`,
+      },
+    ]);
+    tree[".omp/skills/omp-quota-provider/SKILL.md"] = "# Ohne Frontmatter\n";
+    writeTree(root, tree);
+
+    const { parsed } = await runAnalyzer(root);
+    expect(byRule(parsed.findings, "skill").some((f) =>
+      f.message.includes("Frontmatter"),
     )).toBe(true);
   });
 });

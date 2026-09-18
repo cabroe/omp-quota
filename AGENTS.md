@@ -56,6 +56,7 @@ refresh() (poll / open / r / R / right-click / middle-click)
 | `providers/` | One descriptor per provider whose name spelling or behavior deviates from derivation (5 files; `anthropic`, `google-antigravity` deliberately none) |
 | `usage.sh` | PATH-robust wrapper around `omp usage --json`, timeouts, JSON guarantee |
 | `tests/` | `bun test` suites + `load.js` (QML-library loader for Bun) |
+| `scripts/analyze.js` | Static analysis (`bun scripts/analyze.js`): rules the test suite cannot express — see below |
 | `.omp/skills/omp-quota-provider/` | Project skill: full procedure for adding a provider (readable via `skill://omp-quota-provider`) |
 | `.github/workflows/tests.yml` | CI: `bun test` on push/PR to `main` |
 
@@ -66,6 +67,8 @@ not part of this repo.
 
 ```sh
 bun test                                  # whole suite
+bun scripts/analyze.js                    # static analysis; exit 0 clean, 1 findings, 2 usage error
+bun scripts/analyze.js --json             # machine-readable findings
 omarchy restart shell                     # REQUIRED after any change — saving files alone never reloads the widget
 omarchy bar set cabroe.omp-quota refreshIntervalSec 600 --json
 omarchy bar set cabroe.omp-quota alarmThreshold 75 --json
@@ -259,6 +262,23 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   provider API.
 - `tests/manifest.test.js`: manifest invariants, especially
   `defaults` ↔ `schema` lockstep.
+- `scripts/analyze.js` covers what a unit test cannot see, seven rules:
+  `provider-registry` (`providers/*.js` ↔ `.import` ↔ `PLUGINS`, both
+  directions, alphabetical import order as warn), `plugin-discipline`
+  (`id`/`name` present, `strip` forbidden), `panel-hardcoding`
+  (`font.pixelSize`/`radius`/`opacity`/inline `color` bypassing `Style.*`),
+  `usage-sh` (`set -o pipefail`, every omp call through `run_omp`/`timeout`,
+  no `sed` escape in `json_string`), `manifest-bindings` (every
+  `schema[].key` referenced in `Panel.qml`), `provider-coverage` (a plugin
+  whose `name` equals `fallbackName(id)` and carries no `unlimitedWindows`
+  is dead configuration — the derivation is loaded from the real
+  `Providers.js` via `tests/load.js`, never reimplemented), and `skill`
+  (project skill exists, has discoverable frontmatter, and every
+  `` `fn(` `` it names is still declared in `Providers.js`/`Usage.js`).
+- `tests/analyze.test.js` drives the analyzer as a subprocess over temp-dir
+  fixtures (`--root=`, `--json`); each rule has a violating fixture, and
+  `provider-coverage` additionally pins both justifications (deviating
+  spelling, phantom window) as NOT findings.
 - Smoke tests for maintainers:
   1. `./usage.sh` always prints valid JSON (missing omp → error object).
   2. `./usage.sh | head -c1` is non-empty and not a warning banner.
