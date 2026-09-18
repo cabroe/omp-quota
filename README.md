@@ -1,24 +1,28 @@
-# omp Kontingente
+# omp Quotas
 
 [![tests](https://github.com/cabroe/omp-quota/actions/workflows/tests.yml/badge.svg)](https://github.com/cabroe/omp-quota/actions/workflows/tests.yml)
 [![license](https://img.shields.io/github/license/cabroe/omp-quota)](./LICENSE)
 
-Wie viel von deinen KI-Abos ist verbraucht? Dieses Widget für die
-[Omarchy](https://github.com/basecamp/omarchy)-Bar zeigt es dir: in der Bar
-eine Zahl, im Popup die Details — ohne dass du bei Anthropic, OpenAI und Co.
-einzeln nachsehen musst.
+How much of your AI subscriptions have you burned through? This widget for
+the [Omarchy](https://github.com/basecamp/omarchy) bar tells you: one number
+in the bar, the details in a popup — no more checking Anthropic, OpenAI and
+the rest one by one.
 
-Die Daten kommen vom KI-Agenten [omp](https://github.com/can1357/oh-my-pi),
-der die Abos verwaltet und bei den Anbietern abfragt.
+The data comes from the AI agent
+[omp](https://github.com/can1357/oh-my-pi), which manages those
+subscriptions and queries the providers.
 
-## Was du siehst
+> The widget's own labels are German (`unbegrenzt`, `erschöpft`, `Stand vor
+> 3m`). The examples below show them as they appear on screen.
 
-**In der Bar** stehen ein Tacho-Symbol und dein knappster Wert über alle
-Anbieter hinweg, etwa `57%`. Das heißt: von dem Abo, das am weitesten
-aufgebraucht ist, sind 57 % weg. Ab 90 % (einstellbar) wird die Zahl in der
-Warnfarbe gezeichnet, und der Mouseover verrät, um welches Abo es geht.
+## What you see
 
-**Im Popup** steht jeder Anbieter mit seinen Limits:
+**In the bar**: a gauge icon plus your tightest value across all providers,
+e.g. `57%`. That means the subscription closest to its limit is 57 % used.
+From 90 % on (configurable) the number switches to the warning colour, and
+the tooltip tells you which subscription it is.
+
+**In the popup**: every provider with its limits.
 
 ```
 Anthropic                                     Org Ada Lovelace
@@ -34,27 +38,28 @@ MiniMax Code                                  Modell general
   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
-Zeile für Zeile:
+Line by line:
 
-| Element | Bedeutung |
+| Element | Meaning |
 |---|---|
-| `Anthropic` | Der Anbieter. |
-| `Org Ada Lovelace` | Um welchen Zugang es geht — je nach Anbieter der Tarif (`Plan lite`), die Organisation, das Projekt oder das freigeschaltete Modell. |
-| `Claude · 5 Hour` | Das Limit und sein Zeitraum. Anbieter zählen in mehreren Zeiträumen parallel: die 5-Stunden-Grenze entscheidet, ob du *jetzt* arbeiten kannst, die 7-Tage-Grenze ist der Wochenvorrat. Kurze Zeiträume stehen oben. |
-| `4h 12m` | Wann der Zähler wieder auf 0 springt. |
-| `34%` | Wie viel davon verbraucht ist. |
-| Balken | Derselbe Wert zum Ablesen im Vorbeigehen. |
+| `Anthropic` | The provider. |
+| `Org Ada Lovelace` | Which access this is — depending on the provider: the plan (`Plan lite`), the organisation, the cloud project, or the enabled model. |
+| `Claude · 5 Hour` | The limit and its time span. Providers count in several spans at once: the 5-hour budget decides whether you can work *right now*, the 7-day one is your weekly supply. Short spans come first. |
+| `4h 12m` | When the counter resets to zero. |
+| `34%` | How much of it is used. |
+| Bar | The same value, readable at a glance. |
 
-Unter den Anbietern steht, wie alt die Zahlen sind (`Stand vor 3m`).
+Below the providers you see how old the numbers are (`Stand vor 3m` — as of
+3 minutes ago).
 
-### Sonderfälle
+### Special cases
 
-| Anzeige | Heißt |
+| Display | Means |
 |---|---|
-| `∞ unbegrenzt` | Dieses Zeitfenster hat gar kein Limit. Es steht trotzdem da, weil sonst die Frage bliebe, wo es hin ist. Grund: manche Anbieter melden ein unbegrenztes Fenster wie ein leeres, und dann sähe es wie ein unangetastetes Limit aus. |
-| `erschöpft` | Aufgebraucht, hier geht bis zum Reset nichts mehr. |
-| `—` | Der Anbieter macht zu diesem Limit keine Angabe. |
-| `!` in der Bar | Der Abruf ist fehlgeschlagen. Die letzten Zahlen bleiben stehen, der Fehler steht im Popup darüber. |
+| `∞ unbegrenzt` | This time span has no limit at all. It is still listed, because its absence would raise the very question the label answers. Reason: some providers report an unlimited window exactly like an empty one, which would look like an untouched quota. |
+| `erschöpft` | Exhausted — nothing works here until the reset. |
+| `—` | The provider reports no figure for this limit. |
+| `!` in the bar | The fetch failed. The last known numbers stay on screen, with the error shown above them in the popup. |
 
 ## Installation
 
@@ -64,32 +69,31 @@ git clone https://github.com/cabroe/omp-quota.git \
 omarchy restart shell
 ```
 
-Danach das Widget in der Bar aktivieren. Voraussetzungen: Omarchy und `omp`
-(auf `PATH` oder als `mise`-Shim). `bun` brauchst du nur, wenn du die Tests
-laufen lässt.
+Then enable the widget in your bar. Requirements: Omarchy and `omp` (on
+`PATH` or as a `mise` shim). `bun` is only needed to run the tests.
 
-Welche Anbieter auftauchen, entscheidet omp: angezeigt wird, wofür du dort
-angemeldet bist und wofür der Anbieter Verbrauchszahlen herausgibt — aktuell
-Anthropic, Z.ai, Google Antigravity, MiniMax Code, OpenAI Codex, OpenRouter
-und GitHub Copilot.
+Which providers show up is omp's call: you see what you are signed in to and
+what the provider actually exposes usage figures for — currently Anthropic,
+Z.ai, Google Antigravity, MiniMax Code, OpenAI Codex, OpenRouter and GitHub
+Copilot.
 
-## Bedienung
+## Usage
 
-| Aktion | Wirkung |
+| Action | Effect |
 |---|---|
-| Linksklick | Popup öffnen / schließen |
-| Mittelklick, `r` | Neu abrufen |
-| Rechtsklick, `R` oder `f` | Neu abrufen und dabei omps Zwischenspeicher verwerfen (fragt die Anbieter wirklich neu) |
-| `j` / `k`, ↑ / ↓ | Im Popup scrollen |
-| Esc | Popup schließen |
+| Left click | Open / close the popup |
+| Middle click, `r` | Fetch again |
+| Right click, `R` or `f` | Fetch again and drop omp's cache (really re-queries the providers) |
+| `j` / `k`, ↑ / ↓ | Scroll inside the popup |
+| Esc | Close the popup |
 
-Von außen steuerbar:
+From the outside:
 
 ```bash
 omarchy-shell cabroe.omp-quota toggle    # open | close | toggle
 ```
 
-## Einstellungen
+## Settings
 
 ```bash
 omarchy bar set cabroe.omp-quota refreshIntervalSec 600 --json
@@ -97,56 +101,57 @@ omarchy bar set cabroe.omp-quota alarmThreshold 75 --json
 omarchy bar set cabroe.omp-quota redact true --json
 ```
 
-| Einstellung | Default | Wirkung |
+| Setting | Default | Effect |
 |---|---:|---|
-| `refreshIntervalSec` | `300` | Wie oft automatisch abgerufen wird, in Sekunden (60–3600). |
-| `alarmThreshold` | `90` | Ab diesem Prozentwert warnt die Farbe. |
-| `redact` | `false` | Kürzt E-Mails und Konto-IDs — praktisch für Screenshots. |
+| `refreshIntervalSec` | `300` | How often to fetch automatically, in seconds (60–3600). |
+| `alarmThreshold` | `90` | Percentage at which the colour starts warning. |
+| `redact` | `false` | Shortens e-mails and account IDs — handy for screenshots. |
 
-Das `--json` ist Pflicht, sonst landen Zahlen als Text in der Konfiguration
-und werden ignoriert.
+The `--json` flag is mandatory; without it numbers land in the config as
+strings and get ignored.
 
-## Entwicklung
+## Development
 
 ```bash
-bun test              # Normalisierung, Provider-Registry, usage.sh
-omarchy restart shell # Pflicht nach jeder Änderung — Speichern allein reicht nicht
+bun test              # normalisation, provider registry, usage.sh
+omarchy restart shell # required after every change — saving a file is not enough
 ```
 
-Aufbau: `usage.sh` ruft `omp usage --json` auf, `Usage.js` formt die Antwort
-in das um, was das Popup zeigt, `Panel.qml` zeichnet es. Anbieterwissen liegt
-ausschließlich in `providers/`, zusammengeführt von `Providers.js`.
+How it fits together: `usage.sh` calls `omp usage --json`, `Usage.js` turns
+the response into what the popup renders, `Panel.qml` draws it. Everything
+provider-specific lives in `providers/` alone, merged by `Providers.js`.
 
-### Anbieter ergänzen
+### Adding a provider
 
-Neue Anbieter erscheinen von selbst, sobald omp sie kennt — der Name wird
-dann aus omps ID gebildet (`mistral-code` → „Mistral Code"). Eine eigene
-Datei brauchst du nur in zwei Fällen:
+New providers appear on their own as soon as omp knows them — the display
+name is then derived from omp's ID (`mistral-code` → "Mistral Code"). You
+only need a file of your own in two cases:
 
-1. **Die Schreibweise stimmt nicht.** Aus `zai` wird sonst „Zai" statt „Z.ai".
-2. **Ein Zeitfenster ist keins.** Der Anbieter meldet ein Limit, das in
-   Wahrheit unbegrenzt ist (siehe `∞ unbegrenzt` oben).
+1. **The spelling is wrong.** `zai` would otherwise render as "Zai" instead
+   of "Z.ai".
+2. **A time span isn't one.** The provider reports a limit that is in fact
+   unlimited (see `∞ unbegrenzt` above).
 
-Dann eine Datei `providers/<Name>.js` anlegen:
+Then add `providers/<Name>.js`:
 
 ```js
 .pragma library
 
 var descriptor = {
-  id: "minimax-code",          // omps Anbieter-ID aus `omp usage --json`
-  name: "MiniMax Code",        // Name in der Popup-Kopfzeile
-  unlimitedWindows: ["7d"]     // optional: Zeitfenster ohne echtes Limit
+  id: "minimax-code",          // omp's provider ID from `omp usage --json`
+  name: "MiniMax Code",        // name in the popup header
+  unlimitedWindows: ["7d"]     // optional: time spans without a real limit
 };
 ```
 
-und sie in `Providers.js` per `.import` einbinden plus in `PLUGINS`
-eintragen. Beides ist nötig; ein Test meckert, wenn eins davon fehlt.
+and register it in `Providers.js`: pull it in with `.import` and add it to
+`PLUGINS`. Both are required; a test complains if either is missing.
 
-Mehr Details brauchst du selten — wenn doch, stehen sie in
-[`AGENTS.md`](./AGENTS.md). Arbeitest du mit einem Coding-Agenten, findet er
-den kompletten Ablauf samt Abnahmeschritten in
+You rarely need more than that — if you do, it is all in
+[`AGENTS.md`](./AGENTS.md) (German). Working with a coding agent? It will
+find the full procedure, verification steps included, in
 `.omp/skills/omp-quota-provider/SKILL.md`.
 
-## Lizenz
+## License
 
 [MIT](./LICENSE) © 2026 cabroe
