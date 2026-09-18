@@ -77,6 +77,12 @@ omarchy bar set cabroe.omp-quota redact true --json
   (SIGTERM), und bash deferiert das, solange ein Vordergrund-Kind läuft. Nur
   SIGKILL trifft bash, den einzigen Halter der stdout-Pipe — erst dann feuert
   `finished` und die Queue zieht nach.
+- **Der Verlaufsabruf ist ein eigener `Process` (`historyProcess`)** mit
+  eigenem Watchdog, gestartet nur beim Popup-Öffnen. Fehlgeschlagene
+  Verläufe still verwerfen — die Sparkline ist Zutat, die Fehlerkarte
+  gehört dem Live-Abruf. **`statsProcess` ist die dritte Kopie des
+  Musters** (Verbrauchs-Ansicht, Tastenkürzel `v`), dieselbe stille
+  Degradation.
 
 ## 4. Layout und Farben
 
@@ -108,6 +114,13 @@ omarchy bar set cabroe.omp-quota redact true --json
 
 - `set -o pipefail`, Aufruf aus QML als `/bin/bash usage.sh` (kein Exec-Bit
   als Fehlerquelle).
+- Mit dem Argument `history` ruft es `omp usage --json --history --days 7`
+  auf (Verlaufssnapshots für die Sparklines, DB-Lese statt API-Rundtrip);
+  `--fresh`/`invalidate` ist im Verlaufsmodus bedeutungslos und wird nicht
+  ausgeführt. Mit `stats` ruft es `omp stats --json` auf (Session-Statistik
+  der letzten 24 h für die Verbrauchs-Ansicht; die Präambel "Synced …"
+  schneidet die bestehende Sed-Pipeline ab). Alle Guards und die
+  JSON-Garantie gelten in allen drei Modi unverändert.
 - **stdout ist immer ein JSON-Objekt**, auch im Fehlerfall (`{"error": "..."}`
   mit omps stderr). Escaping über Parameter-Expansion in `json_string()`,
   **nie über sed** — die frühere sed-Pipeline ließ Zeilenumbrüche und

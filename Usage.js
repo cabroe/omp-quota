@@ -598,3 +598,264 @@ function barTooltip(report, errorText, now) {
   // Mit Fehler daneben: die Zahl gilt weiter, sie ist nur nicht mehr neu.
   return text + " (Stand " + agoText(data.generatedAt, now) + ", Abruf fehlgeschlagen)";
 }
+
+// ---------------------------------------------------------- Verlaufsdaten
+//
+// `usage.sh history` liefert omps stündliche Snapshots (`--history`): je
+// Zeitstempel, Konto und Fenster ein Füllstand. Für die Sparkline zählt
+// je Zeitstempel der höchste Stand — mehrere Konten desselben Fensters
+// konkurrieren um die schlimmste Zeile, genau wie dedupe() im Live-Report.
+// Ein Durchschnitt würde die Spitze verstecken, um die es geht: der
+// 92-%-Peak in Stundenmitte ist die Aussage, nicht der Tagesmittelwert.
+
+function parseHistory(raw) {
+  var text = String(raw || "").trim();
+  if (text.length === 0)
+    return { error: "Keine Antwort von omp", series: {} };
+
+  var data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    return { error: "Antwort von omp ist kein JSON", series: {} };
+  }
+
+  // Derselbe Objektcheck wie in parse(): JSON.parse schluckt Primitive und
+  // Arrays, ein Verlauf ist aber immer ein Objekt mit entries[].
+  if (data === null || typeof data !== "object" || data instanceof Array)
+    return { error: "Antwort von omp ist kein JSON-Objekt", series: {} };
+
+  if (typeof data.error === "string" && data.error.length > 0)
+    return { error: data.error, series: {} };
+
+  var entries = data.entries instanceof Array ? data.entries : [];
+  // limitId -> Zeitstempel -> Index in series[limitId]. Ohne den Index-
+  // Zwischenspeicher wäre der Max-Vergleich je Konto ein linearer Scan
+  // über die ganze Reihe pro Eintrag.
+  var slots = {};
+  var series = {};
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i] || {};
+    var id = String(entry.limitId || "");
+    if (id.length === 0)
+      continue;
+    var fraction = num(entry.usedFraction);
+    if (!isFinite(fraction))
+      continue;
+    var when = num(entry.recordedAt);
+    if (!isFinite(when))
+      continue;
+    var slot = slots[id];
+    if (slot === undefined) {
+      slot = {};
+      slots[id] = slot;
+      series[id] = [];
+    }
+    var stamp = String(when);
+    var position = slot[stamp];
+    if (position === undefined) {
+      slot[stamp] = series[id].length;
+      series[id].push({ t: when, f: clamp(fraction, 0, 1) });
+    } else if (fraction > series[id][position].f) {
+      series[id][position].f = clamp(fraction, 0, 1);
+    }
+  }
+
+  // omp liefert die Snapshots aufsteigend — verlassen wird sich darauf
+  // trotzdem nicht: eine Umstellung in omp dürfte die X-Achse nicht
+  // spiegeln.
+  for (var limitId in series)
+    series[limitId].sort(function (a, b) { return a.t - b.t; });
+
+  return { error: "", series: series };
+}
+
+// Die Reihe auf `count` Balken verdichten: Maximum je Bucket, geklemmt auf
+// 0..1. Weniger Punkte als Balken bleiben unverdichtet — drei echte Werte
+// sagen mehr als achtundzwanzig, von denen fünfundzwanzig Nullen sind.
+// Ungültige Punkte (NaN) zählen als 0: ein Loch in der Aufzeichnung ist
+// kein Verbrauch.
+function sparkline(points, count) {
+  var list = points instanceof Array ? points : [];
+  var bars = Math.round(num(count));
+  if (!isFinite(bars) || bars < 1)
+    return [];
+
+  var values = [];
+  for (var i = 0; i < list.length; i++) {
+    var value = num(list[i] && list[i].f);
+    values.push(isFinite(value) ? clamp(value, 0, 1) : 0);
+  }
+  if (values.length <= bars)
+    return values;
+
+  var out = [];
+  var step = values.length / bars;
+  for (var b = 0; b < bars; b++) {
+    var from = Math.floor(b * step);
+    var to = Math.min(values.length, Math.floor((b + 1) * step));
+    if (to <= from)
+      to = from + 1;
+    var peak = 0;
+    for (var p = from; p < to; p++) {
+      if (values[p] > peak)
+        peak = values[p];
+    }
+    out.push(peak);
+  }
+  return out;
+}
+
+// Kennzahlen einer Verlaufsreihe für die Verbrauchs-Ansicht: Spitze und
+// Durchschnitt nebeneinander. Das Spitzen-Argument aus parseHistory()
+// gilt weiter — die Aussage ist der 92-%-Peak —, aber ohne Durchschnitt
+// fehlt die Größenordnung, ohne Anzahl die Vertrauensbasis. Zeitstempel
+// (first/last) kommen unverdichtet zurück, damit die Ansicht das Alter
+// der Aufzeichnung selbst formatieren kann.
+function historySummary(points) {
+  var list = points instanceof Array ? points : [];
+  var count = 0;
+  var sum = 0;
+  var peak = 0;
+  var first = NaN;
+  var last = NaN;
+  for (var i = 0; i < list.length; i++) {
+    var value = num(list[i] && list[i].f);
+    if (!isFinite(value))
+      continue;
+    var f = clamp(value, 0, 1);
+    count++;
+    sum += f;
+    if (f > peak)
+      peak = f;
+    if (count === 1)
+      first = num(list[i].t);
+    last = num(list[i].t);
+  }
+  if (count === 0)
+    return { count: 0, average: NaN, peak: NaN, first: NaN, last: NaN };
+  return { count: count, average: sum / count, peak: peak, first: first, last: last };
+}
+
+// Die größten Verbraucher, je Provider genau einer: von jedem Provider mit
+// Aufzeichnung (≥ 2 Punkte, dieselbe Schwelle wie die Sparkline) sein
+// schlimmstes Fenster — Spitze abwärts, Gleichstand nach Durchschnitt —,
+// und die Provider selbst werden nach genau dieser Fenster-Spitze gerankt.
+// Ein Provider erscheint dadurch niemals zweimal; bei drei Einträgen sind
+// es die drei meist verbrauchten Provider mit ihrem jeweiligen Spitzen-
+// fenster. Die Liste ist auf `count` Einträge gekürzt; ein unbrauchbarer
+// Count liefert leer statt ungekürzt, der Aufrufer entscheidet immer
+// bewusst über die Grenze.
+function topConsumers(providers, series, count) {
+  var list = providers instanceof Array ? providers : [];
+  var map = series && typeof series === "object" && !(series instanceof Array) ? series : {};
+  var take = Math.round(num(count));
+  if (!isFinite(take) || take < 1)
+    return [];
+
+  var out = [];
+  for (var p = 0; p < list.length; p++) {
+    var provider = list[p] || {};
+    var limits = provider.limits instanceof Array ? provider.limits : [];
+    var best = null;
+    for (var l = 0; l < limits.length; l++) {
+      var limit = limits[l];
+      if (!limit)
+        continue;
+      var points = map[String(limit.id || "")];
+      var summary = historySummary(points instanceof Array ? points : []);
+      if (summary.count < 2)
+        continue;
+      if (!best || summary.peak > best.peak || (summary.peak === best.peak && summary.average > best.average))
+        best = { provider: provider, limit: limit, peak: summary.peak, average: summary.average };
+    }
+    if (best)
+      out.push(best);
+  }
+  out.sort(function (a, b) {
+    if (b.peak !== a.peak)
+      return b.peak - a.peak;
+    return b.average - a.average;
+  });
+  return out.length > take ? out.slice(0, take) : out;
+}
+
+// ---------------------------------------------------------- Verbrauchsdaten
+//
+// `usage.sh stats` liefert omps Session-Statistik (letzte 24 h, omps
+// eigener Default). Hier wird daraus eine kompakte Ansicht: ein Gesamt-
+// block und die Modelle nach Kosten sortiert. Alles, was das Panel nicht
+// zeigt (Zeitreihen, Ordner, Performance), bleibt bewusst ungeparst —
+// die Ansicht ist eine Übersicht, kein Dashboard.
+
+function parseStats(raw) {
+  var text = String(raw || "").trim();
+  if (text.length === 0)
+    return { error: "Keine Antwort von omp", stats: null };
+
+  var data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    return { error: "Antwort von omp ist kein JSON", stats: null };
+  }
+
+  // Derselbe Objektcheck wie in parse() und parseHistory().
+  if (data === null || typeof data !== "object" || data instanceof Array)
+    return { error: "Antwort von omp ist kein JSON-Objekt", stats: null };
+
+  if (typeof data.error === "string" && data.error.length > 0)
+    return { error: data.error, stats: null };
+
+  var overall = typeof data.overall === "object" && data.overall !== null
+    ? data.overall
+    : {};
+
+  var rawModels = data.byModel instanceof Array ? data.byModel : [];
+  var models = [];
+  for (var i = 0; i < rawModels.length; i++) {
+    var entry = rawModels[i] || {};
+    var name = String(entry.model || "").trim();
+    if (name.length === 0)
+      continue;
+    models.push({
+      name: name,
+      provider: String(entry.provider || "").trim(),
+      requests: Math.round(num(entry.totalRequests)),
+      cost: num(entry.totalCost),
+    });
+  }
+  // Teuer zuerst, bei Gleichstand (Abo-Modelle kosten 0) nach Last. NaN-
+  // Kosten wie 0 behandeln — ein unbepreistes Modell ist kein Fehler.
+  models.sort(function (a, b) {
+    var ca = isFinite(a.cost) ? a.cost : 0;
+    var cb = isFinite(b.cost) ? b.cost : 0;
+    if (cb !== ca)
+      return cb - ca;
+    return b.requests - a.requests;
+  });
+
+  return {
+    error: "",
+    stats: {
+      requests: isFinite(num(overall.totalRequests)) ? Math.round(num(overall.totalRequests)) : 0,
+      errors: isFinite(num(overall.failedRequests)) ? Math.round(num(overall.failedRequests)) : 0,
+      inputTokens: num(overall.totalInputTokens),
+      outputTokens: num(overall.totalOutputTokens),
+      cacheRate: num(overall.cacheRate),
+      cost: num(overall.totalCost),
+      models: models,
+    },
+  };
+}
+
+// Betrag im deutschen Format: "$102,80" — Cents zählen auch bei dreistel-
+// ligen Beträgen. Erst ab vier Stellen runden, dort verliert man das
+// Kleingeld ohnehin aus dem Blick.
+function formatMoney(value) {
+  var n = num(value);
+  if (!isFinite(n))
+    return "";
+  var text = Math.abs(n) >= 1000 ? Math.round(n).toString() : n.toFixed(2);
+  return "$" + text.replace(".", ",");
+}

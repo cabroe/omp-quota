@@ -22,20 +22,21 @@ e.g. `57%`. That means the subscription closest to its limit is 57 % used.
 From 90 % on (configurable) the number switches to the warning colour, and
 the tooltip tells you which subscription it is.
 
-**In the popup**: every provider with its limits.
+**In the popup**: every provider with its limits. The header switches
+between three views — **Kontingente** (quotas), **Verbrauch** (history)
+and **Analyse** (session statistics) — with the mouse or the `v` key,
+which cycles through them.
 
 ```
 Anthropic                                     Org Ada Lovelace
   Claude · 5 Hour                          4h 12m         34%
-  ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  Claude · 7 Day                          20h 42m         57%
-  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 MiniMax Code                                  Modell general
   General · 5 Hour                         2h 42m          8%
-  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
   General · 7 Day                      unbegrenzt           ∞
-  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 Line by line:
@@ -51,6 +52,19 @@ Line by line:
 
 Below the providers you see how old the numbers are (`Stand vor 3m` — as of
 3 minutes ago).
+
+The **Verbrauch** view turns those hourly snapshots into the headline: the
+three most used providers, one row each (never a provider twice) with its
+worst window. Each row shows the last 7 days condensed into 26 bars — each
+bar is the peak of its hour, coloured like the meter — plus the average,
+the peak, and how many hourly snapshots back it. A row at 73 % that peaked
+at 92 % two days ago reads very differently from one that has been
+climbing all evening.
+
+The **Analyse** view shows omp's session statistics for the last 24 h:
+requests and errors, total tokens, cache hit rate, today's cost, and one
+row per model sorted by cost — subscription models that cost nothing show
+their request count instead.
 
 ### Special cases
 
@@ -84,6 +98,7 @@ Copilot.
 | Left click | Open / close the popup |
 | Middle click, `r` | Fetch again |
 | Right click, `R` or `f` | Fetch again and drop omp's cache (really re-queries the providers) |
+| `v` | Switch views: Kontingente → Verbrauch → Analyse (also by clicking the tabs) |
 | `j` / `k`, ↑ / ↓ | Scroll inside the popup |
 | Esc | Close the popup |
 

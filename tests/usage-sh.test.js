@@ -280,4 +280,52 @@ describe("usage.sh Argumente", () => {
     expect(exitCode).toBe(0);
     expect(readFileSync(sandbox.calls, "utf8").trim()).toBe("usage --json");
   });
+
+  test("history: Verlaufsabruf mit 7-Tage-Fenster", async () => {
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"entries":[{"limitId":"a:5h","usedFraction":0.5}]}'`);
+    const { exitCode, stdout } = await runUsage(["history"]);
+    expect(exitCode).toBe(0);
+    expect(readFileSync(sandbox.calls, "utf8").trim()).toBe(
+      "usage --json --history --days 7",
+    );
+    expect(jsonOk(stdout).entries[0].limitId).toBe("a:5h");
+  });
+
+  test("history --redact: Flag wird durchgereicht", async () => {
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"entries":[]}'`);
+    await runUsage(["history", "--redact"]);
+    expect(readFileSync(sandbox.calls, "utf8").trim()).toBe(
+      "usage --json --history --days 7 --redact",
+    );
+  });
+
+  test("history ignoriert --fresh: kein invalidate im Verlaufsmodus", async () => {
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"entries":[]}'`);
+    await runUsage(["history", "--fresh"]);
+    expect(readFileSync(sandbox.calls, "utf8").trim()).toBe(
+      "usage --json --history --days 7",
+    );
+  });
+
+  test("stats: Session-Statistik ohne Zusatz-Flags", async () => {
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"overall":{"totalRequests":5}}'`);
+    const { exitCode, stdout } = await runUsage(["stats"]);
+    expect(exitCode).toBe(0);
+    expect(readFileSync(sandbox.calls, "utf8").trim()).toBe("stats --json");
+    expect(jsonOk(stdout).overall.totalRequests).toBe(5);
+  });
+
+  test("stats schneidet omps Sync-Präambel ab", async () => {
+    // omp stats druckt vor dem JSON eine Zeile wie "Synced 732 new entries".
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo 'Synced 5 new entries from 1 file (10 total)'; echo '{"overall":{}}'`);
+    const { exitCode, stdout } = await runUsage(["stats"]);
+    expect(exitCode).toBe(0);
+    expect(jsonOk(stdout)).toEqual({ overall: {} });
+  });
+
+  test("stats ignoriert --fresh: kein invalidate im Stats-Modus", async () => {
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"overall":{}}'`);
+    await runUsage(["stats", "--fresh"]);
+    expect(readFileSync(sandbox.calls, "utf8").trim()).toBe("stats --json");
+  });
 });

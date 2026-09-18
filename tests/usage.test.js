@@ -29,6 +29,12 @@ const usage = load("../Usage.js", [
   "rampFactor",
   "barText",
   "barTooltip",
+  "parseHistory",
+  "sparkline",
+  "historySummary",
+  "topConsumers",
+  "parseStats",
+  "formatMoney",
 ]);
 
 const providers = load("../Providers.js", ["resolve"]);
@@ -842,5 +848,304 @@ describe("barTooltip", () => {
   test("ohne Messung nur der Fehler bzw. der Titel", () => {
     expect(usage.barTooltip(usage.parse("{}"), "omp weg", now)).toBe("omp: omp weg");
     expect(usage.barTooltip(usage.parse("{}"), "", now)).toBe("omp-Kontingente");
+  });
+});
+
+// Echte Snapshot-Form aus `omp usage --json --history` (gekürzt auf die
+// Felder, die parseHistory liest). Mehrere Konten desselben Fensters und
+// nicht aufsteigende Zeitstempel sind reale omp-Ausgaben.
+function rawEntry(overrides = {}) {
+  return {
+    recordedAt: 1789574060219,
+    provider: "anthropic",
+    accountKey: "oauth|account:x|email:a@example.com",
+    email: "a@example.com",
+    accountId: "x",
+    limitId: "anthropic:5h",
+    label: "Claude 5 Hour",
+    windowLabel: "5 Hour",
+    usedFraction: 0.5,
+    status: "ok",
+    resetsAt: 1789587260219,
+    ...overrides,
+  };
+}
+
+describe("parseHistory", () => {
+  test("Snapshots je limitId, aufsteigend nach recordedAt", () => {
+    const result = usage.parseHistory(JSON.stringify({
+      entries: [
+        rawEntry({ recordedAt: 2000, usedFraction: 0.3 }),
+        rawEntry({ recordedAt: 1000, usedFraction: 0.1 }),
+      ],
+    }));
+    expect(result.error).toBe("");
+    expect(result.series["anthropic:5h"].map((p) => p.f)).toEqual([0.1, 0.3]);
+  });
+
+  test("mehrere Konten je Zeitstempel: der höchste Stand gewinnt", () => {
+    const result = usage.parseHistory(JSON.stringify({
+      entries: [
+        rawEntry({ accountId: "a", usedFraction: 0.2 }),
+        rawEntry({ accountId: "b", usedFraction: 0.9 }),
+        rawEntry({ accountId: "a", usedFraction: 0.4, recordedAt: 1789574060220 }),
+      ],
+    }));
+    expect(result.series["anthropic:5h"].map((p) => p.f)).toEqual([0.9, 0.4]);
+  });
+
+  test("Einträge ohne limitId oder Füllstand fallen raus", () => {
+    const result = usage.parseHistory(JSON.stringify({
+      entries: [
+        rawEntry({ limitId: "" }),
+        rawEntry({ usedFraction: null }),
+        rawEntry({ recordedAt: "x" }),
+        rawEntry({ usedFraction: 0.7 }),
+      ],
+    }));
+    expect(result.series["anthropic:5h"].map((p) => p.f)).toEqual([0.7]);
+  });
+
+  test("Füllstände über 1 werden geklemmt", () => {
+    const result = usage.parseHistory(JSON.stringify({
+      entries: [rawEntry({ usedFraction: 1.5 })],
+    }));
+    expect(result.series["anthropic:5h"][0].f).toBe(1);
+  });
+
+  test("Fehlerobjekt wird als Fehler durchgereicht", () => {
+    expect(usage.parseHistory('{"error":"omp weg"}').error).toBe("omp weg");
+    expect(usage.parseHistory('{"error":"omp weg"}').series).toEqual({});
+  });
+
+  test("leer, kaputt oder kein Objekt: lesbarer Fehler, leere Serie", () => {
+    expect(usage.parseHistory("").error).toContain("Keine Antwort");
+    expect(usage.parseHistory("kein json").error).toContain("kein JSON");
+    expect(usage.parseHistory("null").error).toContain("kein JSON-Objekt");
+    expect(usage.parseHistory("[1]").error).toContain("kein JSON-Objekt");
+  });
+
+  test("fehlende entries: kein Fehler, leere Serie", () => {
+    const result = usage.parseHistory("{}");
+    expect(result.error).toBe("");
+    expect(result.series).toEqual({});
+  });
+});
+
+describe("sparkline", () => {
+  const pts = (fs) => fs.map((f) => ({ t: 0, f }));
+
+  test("Maximum je Bucket — die Spitze überlebt das Verdichten", () => {
+    // 10 Punkte -> 5 Balken; Bucket 1 enthält die 0.92-Spitze.
+    const bars = usage.sparkline(pts([0.1, 0.2, 0.92, 0.3, 0.4, 0.1, 0.5, 0.1, 0.2, 0.1]), 5);
+    expect(bars).toEqual([0.2, 0.92, 0.4, 0.5, 0.2]);
+  });
+
+  test("weniger Punkte als Balken bleiben unverdichtet", () => {
+    expect(usage.sparkline(pts([0.1, 0.5, 0.3]), 26)).toEqual([0.1, 0.5, 0.3]);
+  });
+
+  test("NaN-Punkte zählen als 0 — ein Loch ist kein Verbrauch", () => {
+    expect(usage.sparkline([{ t: 0, f: "x" }, { t: 1 }, { t: 2, f: 0.4 }], 26))
+      .toEqual([0, 0, 0.4]);
+  });
+
+  test("Werte über 1 werden geklemmt", () => {
+    expect(usage.sparkline(pts([1.5]), 3)).toEqual([1]);
+  });
+
+  test("unbrauchbare Eingaben: leere Liste", () => {
+    expect(usage.sparkline(undefined, 26)).toEqual([]);
+    expect(usage.sparkline(pts([0.5]), 0)).toEqual([]);
+    expect(usage.sparkline(pts([0.5]), NaN)).toEqual([]);
+  });
+});
+
+describe("historySummary", () => {
+  // Zeilen mit echten Zeitstempeln — first/last sind Teil des Vertrags.
+  const rows = (fs) => fs.map((f, i) => ({ t: i * 3600, f }));
+
+  test("Durchschnitt, Spitze und Anzahl über die gültigen Punkte", () => {
+    const s = usage.historySummary(rows([0.1, 0.92, 0.3]));
+    expect(s.count).toBe(3);
+    expect(s.average).toBeCloseTo((0.1 + 0.92 + 0.3) / 3, 12);
+    expect(s.peak).toBeCloseTo(0.92, 12);
+    expect(s.first).toBe(0);
+    expect(s.last).toBe(7200);
+  });
+
+  test("ein Punkt: Spitze gleich Durchschnitt, first gleich last", () => {
+    const s = usage.historySummary(rows([0.5]));
+    expect(s.count).toBe(1);
+    expect(s.average).toBeCloseTo(0.5, 12);
+    expect(s.peak).toBeCloseTo(0.5, 12);
+    expect(s.first).toBe(0);
+    expect(s.last).toBe(0);
+  });
+
+  test("NaN-Punkte werden übersprungen, Zeitstempel trotzdem geführt", () => {
+    const s = usage.historySummary([{ t: 10, f: "x" }, { t: 20, f: 0.4 }, { t: 30 }]);
+    expect(s.count).toBe(1);
+    expect(s.average).toBeCloseTo(0.4, 12);
+    expect(s.peak).toBeCloseTo(0.4, 12);
+    expect(s.first).toBe(20);
+    expect(s.last).toBe(20);
+  });
+
+  test("Werte werden auf 0..1 geklemmt", () => {
+    const s = usage.historySummary(rows([1.5, -0.2]));
+    expect(s.average).toBe(0.5);
+    expect(s.peak).toBe(1);
+  });
+
+  test("leere und unbrauchbare Eingaben: alles NaN, count 0", () => {
+    for (const input of [undefined, null, [], [{}], [{ t: 1 }, { t: 2, f: "x" }]]) {
+      const s = usage.historySummary(input);
+      expect(s.count).toBe(0);
+      expect(s.average).toBeNaN();
+      expect(s.peak).toBeNaN();
+      expect(s.first).toBeNaN();
+      expect(s.last).toBeNaN();
+    }
+  });
+});
+
+describe("topConsumers", () => {
+  // Drei Provider: A mit zwei Fenstern (nur das schlimmste zählt), B mit
+  // einem, C ohne Aufzeichnung. Nur Fenster mit ≥ 2 Punkten gelten.
+  const PROVIDERS = [
+    { name: "A", limits: [{ id: "a5", title: "A 5h" }, { id: "aweek", title: "A week" }] },
+    { name: "B", limits: [{ id: "b5", title: "B 5h" }, { id: "b-empty", title: "B leer" }] },
+    { name: "C", limits: [{ id: "c5", title: "C 5h" }] },
+  ];
+
+  test("je Provider genau ein Fenster: das mit der höchsten Spitze", () => {
+    const series = {
+      a5: [{ t: 0, f: 0.9 }, { t: 3600, f: 0.2 }],
+      aweek: [{ t: 0, f: 0.5 }, { t: 3600, f: 0.5 }],
+      b5: [{ t: 0, f: 0.7 }, { t: 3600, f: 0.4 }],
+    };
+    const top = usage.topConsumers(PROVIDERS, series, 3);
+    // A nur einmal (a5, Peak 0.9 — nicht aweek), B einmal, C ohne Daten raus.
+    expect(top.map((e) => e.limit.id)).toEqual(["a5", "b5"]);
+    expect(top.map((e) => e.provider.name)).toEqual(["A", "B"]);
+    expect(top[0].peak).toBeCloseTo(0.9, 12);
+  });
+
+  test("Provider-Rang folgt der Spitze ihres schlimmsten Fensters", () => {
+    const series = {
+      a5: [{ t: 0, f: 0.4 }, { t: 3600, f: 0.3 }],
+      b5: [{ t: 0, f: 0.8 }, { t: 3600, f: 0.2 }],
+      c5: [{ t: 0, f: 0.6 }, { t: 3600, f: 0.6 }],
+    };
+    const top = usage.topConsumers(PROVIDERS, series, 3);
+    expect(top.map((e) => e.provider.name)).toEqual(["B", "C", "A"]);
+  });
+
+  test("Fenster ohne Aufzeichnung (unter 2 Punkten) fallen heraus", () => {
+    const series = {
+      a5: [{ t: 0, f: 0.9 }, { t: 3600, f: 0.2 }],
+      "b-empty": [{ t: 0, f: 1.0 }],
+    };
+    const top = usage.topConsumers(PROVIDERS, series, 3);
+    expect(top.map((e) => e.provider.name)).toEqual(["A"]);
+  });
+
+  test("count kürzt die Liste", () => {
+    const series = {
+      a5: [{ t: 0, f: 0.9 }, { t: 3600, f: 0.2 }],
+      b5: [{ t: 0, f: 0.7 }, { t: 3600, f: 0.4 }],
+      c5: [{ t: 0, f: 0.6 }, { t: 3600, f: 0.6 }],
+    };
+    expect(usage.topConsumers(PROVIDERS, series, 2).map((e) => e.provider.name))
+      .toEqual(["A", "B"]);
+    expect(usage.topConsumers(PROVIDERS, series, 1).map((e) => e.provider.name))
+      .toEqual(["A"]);
+  });
+
+  test("unbrauchbare Eingaben: leere Liste", () => {
+    expect(usage.topConsumers(undefined, undefined, 3)).toEqual([]);
+    expect(usage.topConsumers(PROVIDERS, undefined, 3)).toEqual([]);
+    expect(usage.topConsumers(PROVIDERS, [], 3)).toEqual([]);
+    expect(usage.topConsumers(PROVIDERS, { a5: [{ t: 0, f: 0.5 }, { t: 1, f: 0.5 }] }, NaN)).toEqual([]);
+    expect(usage.topConsumers(PROVIDERS, { a5: [{ t: 0, f: 0.5 }, { t: 1, f: 0.5 }] }, 0)).toEqual([]);
+  });
+});
+
+// Echte omp-stats-Form (gekürzt auf die Felder, die parseStats liest).
+const STATS_RAW = JSON.stringify({
+  overall: {
+    totalRequests: 2297,
+    failedRequests: 10,
+    totalInputTokens: 5469798,
+    totalOutputTokens: 1232622,
+    cacheRate: 0.9756,
+    totalCost: 102.8004,
+  },
+  byModel: [
+    { model: "glm-5.3", provider: "zai", totalRequests: 164, totalCost: 3.99 },
+    { model: "claude-opus-5", provider: "anthropic", totalRequests: 675, totalCost: 94.28 },
+    { model: "MiniMax-M3", provider: "minimax-code", totalRequests: 820, totalCost: 0 },
+  ],
+});
+
+describe("parseStats", () => {
+  test("Gesamtblock wird übernommen", () => {
+    const { error, stats } = usage.parseStats(STATS_RAW);
+    expect(error).toBe("");
+    expect(stats.requests).toBe(2297);
+    expect(stats.errors).toBe(10);
+    expect(stats.cost).toBeCloseTo(102.8004);
+    expect(stats.cacheRate).toBeCloseTo(0.9756);
+  });
+
+  test("Modelle nach Kosten absteigend, bei Gleichstand nach Last", () => {
+    const { stats } = usage.parseStats(STATS_RAW);
+    expect(stats.models.map((m) => m.name)).toEqual([
+      "claude-opus-5", "glm-5.3", "MiniMax-M3",
+    ]);
+  });
+
+  test("unbepreiste Modelle mit mehr Last schlagen vor teurere ohne Last", () => {
+    const { stats } = usage.parseStats(JSON.stringify({
+      overall: {},
+      byModel: [
+        { model: "a", totalRequests: 1, totalCost: 5 },
+        { model: "b", totalRequests: 900, totalCost: 0 },
+        { model: "c", totalRequests: 50, totalCost: 0 },
+      ],
+    }));
+    expect(stats.models.map((m) => m.name)).toEqual(["a", "b", "c"]);
+  });
+
+  test("Fehlerobjekt und kaputte Eingabe: Fehler, stats null", () => {
+    expect(usage.parseStats('{"error":"weg"}').error).toBe("weg");
+    expect(usage.parseStats("").error).toContain("Keine Antwort");
+    expect(usage.parseStats("nix").error).toContain("kein JSON");
+    expect(usage.parseStats("5").error).toContain("kein JSON-Objekt");
+    expect(usage.parseStats('{"error":"weg"}').stats).toBeNull();
+  });
+
+  test("fehlende Felder: leere, aber gültige Ansicht", () => {
+    const { error, stats } = usage.parseStats("{}");
+    expect(error).toBe("");
+    expect(stats.models).toEqual([]);
+    expect(stats.requests).toBe(0);
+  });
+});
+
+describe("formatMoney", () => {
+  test("deutsches Komma, zwei Nachkommastellen", () => {
+    expect(usage.formatMoney(102.8004)).toBe("$102,80");
+    expect(usage.formatMoney(0.5)).toBe("$0,50");
+  });
+
+  test("ab 1000 ohne Nachkommastellen", () => {
+    expect(usage.formatMoney(1234.56)).toBe("$1235");
+  });
+
+  test("unbrauchbare Eingabe: leer", () => {
+    expect(usage.formatMoney(null)).toBe("");
+    expect(usage.formatMoney("x")).toBe("");
   });
 });

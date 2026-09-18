@@ -12,7 +12,9 @@ import "Usage.js" as Usage
 // Provider, das Popup jedes einzelne Fenster mit Füllstand und Reset-Zeit.
 //
 // Datenquelle ist `usage.sh`, das `omp usage --json` PATH-robust aufruft.
-// Die komplette Normalisierung steckt in Usage.js.
+// Für die Verlaufssparklines im Popup holt `usage.sh history` zusätzlich
+// omps stündliche Snapshots — beim Öffnen, nicht im Poll. Die komplette
+// Normalisierung steckt in Usage.js.
 Panel {
   id: root
   moduleName: "cabroe.omp-quota"
@@ -68,6 +70,31 @@ Panel {
   // Anzeige — ein Report von vorher zeigt genau die Konten, die gerade
   // verborgen werden sollen.
   property bool requestRedact: false
+
+  // Verlaufssnapshots je Fenster (limitId -> aufsteigende Füllstände),
+  // Grundlage der Sparklines. Bewusst kein Bestandteil des Live-Polls:
+  // die Aufzeichnung ist stündlich, der Poll minütlich — dasselbe Bild
+  // dutzendfach aus omp zu lesen, wäre reiner Prozess-Müll. Fehlgeschlage-
+  // ne Verläufe sind still: die Sparkline ist eine Zutat, kein Vertrag —
+  // der letzte gute Stand bleibt, die Fehlerkarte gehört dem Live-Abruf.
+  property var historySeries: ({})
+  property bool historyPending: false
+
+  // Balkenzahl der Sparkline. 26 Balken auf ~370 px Inhalt: jeder knapp
+  // 2 px breit — dick genug, um eine Spitze zu lesen, fein genug für die
+  // Stundenauflösung von 7 Tagen.
+  readonly property int sparkBars: 26
+
+  // Analyse-Ansicht (`usage.sh stats` → omp stats, letzte 24 h). Gleiche
+  // Verantwortungsteilung wie der Verlauf: eigener Prozess, eigener
+  // Watchdog, Fetch beim Öffnen, Fehler still — die Statistik ist eine
+  // eigene Ansicht, kein Ersatz für die Kontingente. `activeView`
+  // überlebt das Schließen: der Umschalter ist eine Lesebrille, kein Reset.
+  property var statsData: null
+  property bool statsPending: false
+  // 0 = Kontingente, 1 = Verbrauch (Verlauf je Fenster), 2 = Analyse
+  // (Session-Statistik).
+  property int activeView: 0
 
   readonly property string errorText: fetchError !== "" ? fetchError : String(report.error || "")
   readonly property bool hasError: errorText !== ""
@@ -262,6 +289,62 @@ Panel {
       root.report = Usage.failed(message)
   }
 
+  // Verlaufsreihe eines Fensters, leer wenn unbekannt. Der Zugriff über
+  // die Funktion statt direkt aufs Objekt hält den Guard an einer Stelle.
+  function historyFor(limitId) {
+    var key = String(limitId || "")
+    var series = root.historySeries
+    return series && series[key] instanceof Array ? series[key] : []
+  }
+
+  function refreshHistory() {
+    if (historyProcess.running || !root.opened)
+      return
+    var args = ["/bin/bash", root.collector, "history"]
+    if (root.redact)
+      args.push("--redact")
+    root.historyPending = true
+    historyWatchdog.restart()
+    historyProcess.command = args
+    historyProcess.running = true
+  }
+
+  function applyHistory(raw) {
+    // Der Watchdog hat abgeschrieben: Spätes aus der Pipe darf nicht in
+    // einen Zustand schreiben, den niemand mehr erwartet (gleiche Regel
+    // wie applyReport — nur ohne Fehlerkarte, siehe oben).
+    if (!root.historyPending)
+      return
+    root.historyPending = false
+    historyWatchdog.stop()
+    var parsed = Usage.parseHistory(raw)
+    if (String(parsed.error || "") !== "")
+      return
+    root.historySeries = parsed.series
+  }
+
+  function refreshStats() {
+    if (statsProcess.running || !root.opened)
+      return
+    root.statsPending = true
+    statsWatchdog.restart()
+    statsProcess.command = ["/bin/bash", root.collector, "stats"]
+    statsProcess.running = true
+  }
+
+  function applyStats(raw) {
+    // Gleiche Guard-Regel wie applyHistory: nach dem Watchdog kommt nichts
+    // mehr in einen Zustand, den niemand erwartet.
+    if (!root.statsPending)
+      return
+    root.statsPending = false
+    statsWatchdog.stop()
+    var parsed = Usage.parseStats(raw)
+    if (parsed.stats === null)
+      return
+    root.statsData = parsed.stats
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -282,6 +365,13 @@ Panel {
       nowMs = Date.now()
       flick.contentY = 0
       refresh(false)
+      // Verlauf nur im Öffnen: er ist stündlich, der frischeste Stand vor
+      // dem letzten Öffnen reicht dafür. Ein laufender Verlaufsabruf wird
+      // nicht doppelt gestartet (refreshHistory guardt selbst).
+      refreshHistory()
+      // Dasselbe für die Verbrauchszahlen — der Umschalter soll sofort
+      // etwas zeigen, wenn er benutzt wird.
+      refreshStats()
     }
   }
 
@@ -300,6 +390,73 @@ Panel {
         return
       root.failFetch("Abruf lieferte keine Ausgabe — usage.sh oder /bin/bash fehlt")
       root.drainQueue()
+    }
+  }
+
+  // Verlaufsabruf: gleiche Architektur wie usageProcess, aber eigenständig
+  // — der Live-Poll darf von einem hängenden Verlauf nicht blockiert wer-
+  // den und umgekehrt. Fehler werden still verworfen (Zutat, kein Vertrag).
+  Process {
+    id: historyProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyHistory(text)
+    }
+    onRunningChanged: {
+      if (running)
+        return
+      // Nichts geliefert (Skript fehlt, abgeschossen): den offenen Abruf
+      // schließen, damit das nächste Öffnen nicht für immer blockiert.
+      if (root.historyPending) {
+        root.historyPending = false
+        historyWatchdog.stop()
+      }
+    }
+  }
+
+  // Derselbe Hänger-Fall wie beim Live-Watchdog: running = false allein
+  // reicht nicht (bash deferiert SIGTERM beim Vordergrund-Kind), deshalb
+  // zusätzlich das SIGKILL an bash — den alleinigen Halter der Pipe.
+  Timer {
+    id: historyWatchdog
+    interval: 25000
+    repeat: false
+    onTriggered: {
+      root.historyPending = false
+      historyProcess.running = false
+      historyProcess.signal(9)
+    }
+  }
+
+  // Verbrauchsabruf: drittes Exemplar desselben Musters. Eigenständig vom
+  // Live-Poll und vom Verlauf — ein Hänger in einer Quelle darf die
+  // anderen zwei nicht blockieren.
+  Process {
+    id: statsProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyStats(text)
+    }
+    onRunningChanged: {
+      if (running)
+        return
+      if (root.statsPending) {
+        root.statsPending = false
+        statsWatchdog.stop()
+      }
+    }
+  }
+
+  Timer {
+    id: statsWatchdog
+    interval: 25000
+    repeat: false
+    onTriggered: {
+      root.statsPending = false
+      statsProcess.running = false
+      statsProcess.signal(9)
     }
   }
 
@@ -402,6 +559,8 @@ Panel {
           root.refresh(false)
         else if (t === "R" || t === "f")
           root.refresh(true)
+        else if (t === "v")
+          root.activeView = (root.activeView + 1) % 3
       }
 
       Flickable {
@@ -455,6 +614,19 @@ Panel {
             }
           }
 
+          // Umschalter zwischen Kontingente, Analyse und Verbrauch. Die
+          // Datensätze liegen beim Öffnen bereits vor — der Wechsel ist
+          // rein lokal, kein Abruf. Bleibt stehen, wenn der Live-Abruf
+          // fehlschlägt: die Fehlerkarte gehört zur Kontingent-Ansicht.
+          Row {
+            width: parent.width
+            spacing: Style.space(14)
+
+            ViewTab { view: 0 }
+            ViewTab { view: 1 }
+            ViewTab { view: 2 }
+          }
+
           // Fehlerkarte. Steht auch dann da, wenn darunter noch Zahlen aus
           // dem letzten guten Abruf stehen — sonst hielte man einen alten
           // Stand für den aktuellen.
@@ -484,7 +656,7 @@ Panel {
 
           PanelSeparator {
             foreground: root.foreground
-            visible: root.providerCount > 0
+            visible: root.providerCount > 0 && root.activeView === 0
           }
 
           Repeater {
@@ -494,6 +666,241 @@ Panel {
               required property int index
               width: content.width
               provider: root.providerAt(index)
+              // Die Komponente definiert sichtbar an provider !== null —
+              // hier kommt der Ansichts-Wechsel dazu.
+              visible: root.activeView === 0 && provider !== null
+            }
+          }
+
+          // Analyse-Ansicht: Gesamtblock und Modelle nach Kosten. Pur
+          // als Textzeilen — keine Meter, es gibt keinen Füllstand, den
+          // eine Rampe deuten könnte. Kosten in Vordergrundfarbe, Abo-
+          // Modelle (0 $) im Grau. Dasselbe Design wie die Kontingent-
+          // Abschnitte: Trennlinie, Kopfzeile (Titel links, Meta rechts)
+          // und dieselbe Rhythmik (topPadding 12 / innen 8 / bottom 8).
+          Column {
+            id: statsView
+            width: parent.width
+            visible: root.activeView === 2
+            spacing: Style.space(8)
+            bottomPadding: Style.space(8)
+
+            readonly property var stats: root.statsData
+            readonly property int modelCount: stats && stats.models instanceof Array ? stats.models.length : 0
+
+            PanelSeparator {
+              width: parent.width
+              foreground: root.foreground
+            }
+
+            Row {
+              width: parent.width
+
+              PanelSectionHeader {
+                id: statsTitle
+                text: "Analyse"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                color: root.foreground
+              }
+
+              Item {
+                width: Math.max(0, parent.width - statsTitle.implicitWidth - statsMeta.width)
+                height: 1
+              }
+
+              PanelSectionHeader {
+                id: statsMeta
+                text: "letzte 24 h · omp-Sessionstatistik"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                font.bold: false
+                opacity: root.metaOpacity
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, parent.width * 0.6)
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: statsView.stats !== null
+              textFormat: Text.PlainText
+              text: {
+                var s = statsView.stats
+                if (!s)
+                  return ""
+                var parts = []
+                parts.push(Usage.compact(s.requests) + " Anfragen")
+                if (s.errors > 0)
+                  parts.push(s.errors + " Fehler")
+                var tokens = s.inputTokens + s.outputTokens
+                if (isFinite(tokens) && tokens > 0)
+                  parts.push(Usage.compact(tokens) + " Tokens")
+                if (isFinite(s.cacheRate) && s.cacheRate > 0)
+                  parts.push(Math.round(s.cacheRate * 100) + "% Cache")
+                return parts.join("  ·  ")
+              }
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              visible: statsView.stats !== null && isFinite(statsView.stats.cost)
+              textFormat: Text.PlainText
+              text: "Kosten heute: " + Usage.formatMoney(statsView.stats ? statsView.stats.cost : NaN)
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            // Modelle: Name links, Last und Kosten rechts. Der Spacer
+            // zieht dieselbe Tail-Breite ab wie der Titel einräumt —
+            // dieselbe Regel wie in LimitRow.
+            Repeater {
+              model: statsView.modelCount
+
+              delegate: Row {
+                id: modelRow
+                required property int index
+                width: statsView.width
+
+                readonly property var entry: statsView.stats.models[index]
+                // Was rechts steht: Last und Kosten. Einmal benannt —
+                // Titelbreite und Spacer ziehen denselben Wert ab.
+                readonly property real tail: modelReqs.implicitWidth + modelCost.implicitWidth
+
+                Text {
+                  id: modelName
+                  textFormat: Text.PlainText
+                  text: modelRow.entry.name
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                  width: Math.min(implicitWidth, Math.max(0, parent.width - modelRow.tail - Style.space(12)))
+                }
+
+                Item {
+                  width: Math.max(0, parent.width - modelName.width - modelRow.tail)
+                  height: 1
+                }
+
+                Text {
+                  id: modelReqs
+                  textFormat: Text.PlainText
+                  text: Usage.compact(modelRow.entry.requests)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  rightPadding: text !== "" ? Style.space(8) : 0
+                  anchors.baseline: modelName.baseline
+                }
+
+                Text {
+                  id: modelCost
+                  textFormat: Text.PlainText
+                  text: isFinite(modelRow.entry.cost) && modelRow.entry.cost > 0
+                        ? Usage.formatMoney(modelRow.entry.cost) : "—"
+                  color: isFinite(modelRow.entry.cost) && modelRow.entry.cost > 0 ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.baseline: modelName.baseline
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: statsView.stats === null
+              textFormat: Text.PlainText
+              text: root.statsPending ? "wird geladen" : "keine Verbrauchsdaten"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+          }
+
+          // Verbrauchs-Ansicht: die drei meist verbrauchten Provider, je
+          // einer mit vergrößerter Sparkline und Kennzahlen (Ø, Spitze,
+          // Anzahl Stundenwerte). Das Ranking liefert topConsumers() — je
+          // Provider sein schlimmstes Fenster, nie ein Provider doppelt.
+          // Dasselbe Design wie die Kontingent-Abschnitte: Trennlinie,
+          // Kopfzeile (Titel links, Meta rechts) und dieselbe Rhythmik
+          // (topPadding 12 / innen 8 / bottom 8).
+          Column {
+            id: historyView
+            width: parent.width
+            visible: root.activeView === 1
+            spacing: Style.space(8)
+            bottomPadding: Style.space(8)
+
+            readonly property int topCount: 3
+            readonly property var entries: Usage.topConsumers(root.providers, root.historySeries, historyView.topCount)
+            readonly property int entryCount: entries.length
+
+            function entryAt(position) {
+              var list = historyView.entries
+              return position >= 0 && position < list.length ? list[position] : null
+            }
+
+            PanelSeparator {
+              width: parent.width
+              foreground: root.foreground
+            }
+
+            Row {
+              width: parent.width
+
+              PanelSectionHeader {
+                id: historyTitle
+                text: "Verbrauch"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                color: root.foreground
+              }
+
+              Item {
+                width: Math.max(0, parent.width - historyTitle.implicitWidth - historyMeta.width)
+                height: 1
+              }
+
+              PanelSectionHeader {
+                id: historyMeta
+                text: "letzte 7 Tage · Stundenwerte"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                font.bold: false
+                opacity: root.metaOpacity
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, parent.width * 0.6)
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: historyView.entryCount === 0
+              textFormat: Text.PlainText
+              text: root.historyPending ? "wird geladen" : "keine Verlaufsdaten"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Repeater {
+              model: historyView.entryCount
+
+              delegate: HistoryRow {
+                required property int index
+                width: historyView.width
+                provider: historyView.entryAt(index) ? historyView.entryAt(index).provider : null
+                limit: historyView.entryAt(index) ? historyView.entryAt(index).limit : null
+              }
             }
           }
 
@@ -548,7 +955,7 @@ Panel {
                 anchors.right: versionLabel.left
                 anchors.rightMargin: Style.space(8)
                 anchors.top: parent.top
-                text: "r neu laden · R Cache leeren"
+                text: "v Ansicht · r neu laden · R Cache leeren"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -813,6 +1220,126 @@ Panel {
           }
         }
       }
+    }
+  }
+
+  // Eine Verlaufszeile: Titel (Provider · Fenster), große Sparkline und
+  // Kennzahlen. Die Zeile stammt aus topConsumers() — die drei größten
+  // Verbraucher über alle Provider hinweg, daher trägt der Titel den
+  // Providernamen mit.
+  component HistoryRow: Column {
+    id: historyRow
+    property var provider: null
+    property var limit: null
+
+    readonly property string titleText: {
+      var name = historyRow.provider ? String(historyRow.provider.name || "") : ""
+      var title = historyRow.limit ? String(historyRow.limit.title || "") : ""
+      return name !== "" && title !== "" ? name + " · " + title : (name !== "" ? name : title)
+    }
+
+    readonly property var spark:
+      Usage.sparkline(root.historyFor(limit ? limit.id : ""), root.sparkBars)
+    readonly property int sparkCount: spark.length
+    readonly property var summary:
+      historyRow.sparkCount >= 2 ? Usage.historySummary(root.historyFor(limit ? limit.id : "")) : null
+    readonly property string summaryText: {
+      if (!historyRow.summary)
+        return ""
+      var parts = []
+      parts.push("Ø " + Math.round(historyRow.summary.average * 100) + " %")
+      parts.push("Spitze " + Math.round(historyRow.summary.peak * 100) + " %")
+      parts.push(Usage.plural(historyRow.summary.count, "Stundenwert", "Stundenwerte"))
+      return parts.join(" · ")
+    }
+
+    spacing: Style.space(5)
+    visible: historyRow.sparkCount >= 2
+
+    Row {
+      width: parent.width
+
+      readonly property real tailWidth: historyStand.implicitWidth
+
+      Text {
+        id: historyTitle
+        textFormat: Text.PlainText
+        text: historyRow.titleText
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
+        width: Math.min(implicitWidth, Math.max(0, parent.width - parent.tailWidth - Style.space(12)))
+      }
+
+      Item {
+        width: Math.max(0, parent.width - historyTitle.width - parent.tailWidth)
+        height: 1
+      }
+
+      Text {
+        id: historyStand
+        textFormat: Text.PlainText
+        // Das Alter der Aufzeichnung, nicht des Live-Stands: eine Reihe,
+        // die seit Tagen nichts Neues bekam, sagt das hier.
+        text: historyRow.summary && isFinite(historyRow.summary.last)
+              ? "Stand " + Usage.agoText(historyRow.summary.last, root.nowMs) : ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        anchors.baseline: historyTitle.baseline
+      }
+    }
+
+    // Dieselbe Balkenlogik wie in LimitRow, aber auf eigener Höhe: 26
+    // Balken brauchen Platz, damit die Spitze lesbar bleibt.
+    Item {
+      width: parent.width
+      implicitHeight: Style.space(40)
+
+      Repeater {
+        model: historyRow.sparkCount
+
+        delegate: Rectangle {
+          required property int index
+
+          x: index * width
+          width: parent.width / historyRow.sparkCount
+          height: parent.height * historyRow.spark[index]
+          anchors.bottom: parent.bottom
+          color: root.colorFor(historyRow.spark[index], false)
+        }
+      }
+    }
+
+    Text {
+      width: parent.width
+      visible: historyRow.summaryText !== ""
+      textFormat: Text.PlainText
+      text: historyRow.summaryText
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  // Ein Tab im Ansichtsumschalter. Aktiv: volle Farbe und fett; inaktiv:
+  // gedimmt. Der Klick setzt nur activeView — geladen wird beim Öffnen,
+  // nicht beim Umschalten.
+  component ViewTab: Text {
+    id: tab
+    property int view: 0
+
+    textFormat: Text.PlainText
+    text: ["Kontingente", "Verbrauch", "Analyse"][tab.view]
+    color: tab.view === root.activeView ? root.foreground : root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.bodySmall
+    font.bold: tab.view === root.activeView
+
+    MouseArea {
+      anchors.fill: parent
+      onClicked: root.activeView = tab.view
     }
   }
 }

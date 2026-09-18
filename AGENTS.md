@@ -19,14 +19,23 @@ usage.sh ──► stdout JSON ──► Usage.js: parse() ──► Panel.qml (
    ▲                 │
    │                 └──► Providers.js: resolve(id) ──► providers/*.js
 refresh() (poll / open / r / R / right-click / middle-click)
+refreshHistory() (popup open only) ──► Usage.js: parseHistory()
+refreshStats() (popup open only) ──► Usage.js: parseStats()
 ```
 
 1. **Trigger** (`Panel.qml`): `Component.onCompleted`, `pollTimer`
    (`refreshIntervalSec`), popup open, middle-click/`r` (refresh),
    right-click/`R`/`f` (refresh with `--fresh`), `onRedactChanged`.
+   Popup open additionally runs `refreshHistory()` and `refreshStats()`
+   (own `historyProcess`/`statsProcess`).
 2. **Fetch**: `Process { id: usageProcess }` runs `/bin/bash usage.sh` with
    optional `--redact`/`--fresh`. `usage.sh` locates `omp` (Hyprland PATH ≠
    login PATH) and calls `omp usage --json` under `timeout -k 2 20`.
+   With the `history` argument it calls `omp usage --json --history
+   --days 7` instead (sparkline data; no `invalidate`, cheap DB read).
+   With `stats` it calls `omp stats --json` (session statistics, last 24 h
+   — omp's own default; its "Synced ..." preamble is cut by the existing
+   sed pipeline).
 3. **JSON guarantee**: `usage.sh` always writes one JSON object to stdout —
    on failure `{"error": "..."}` including omp's stderr. A preamble sed
    pipeline cuts everything before the first real `{`.
@@ -36,6 +45,17 @@ refresh() (poll / open / r / R / right-click / middle-click)
 5. **Render**: bar shows `worst` over all providers; popup lists providers
    alphabetically, limits per provider by `durationMs` ascending, each with
    title + status/amount + reset countdown + percent + animated meter.
+   The popup header switches between three views (mouse or `v` key
+   cycling): "Kontingente" (the limit rows), "Analyse" (stats view:
+   requests/errors/tokens/cache, today's cost and per-model rows sorted by
+   cost) and "Verbrauch" (the top three providers, one row each — never a
+   provider twice: `Usage.topConsumers()` takes every provider's worst
+   window (≥ 2 recorded points, ranked by peak, ties by average) and ranks
+   the providers by that peak — each row with a large 26-bucket sparkline,
+   plus `Usage.historySummary()` — average, peak, snapshot count, last
+   snapshot age). Tab order: Kontingente, Verbrauch, Analyse.
+   `activeView` (0/1/2) survives close; both fetches run on
+   open so switching is instant.
 6. **Fetch lifecycle** (`Panel.qml`): a request arriving while a fetch runs
    is queued (`queuedRefresh`/`queuedFresh`, `fresh` wins), never dropped;
    `drainQueue()` replays it on `onRunningChanged`. `requestRedact` records
@@ -44,7 +64,12 @@ refresh() (poll / open / r / R / right-click / middle-click)
    bail out when `!pending` (late pipe fragments after a watchdog kill must
    not overwrite the precise error). A 25 s watchdog kills a hung fetch.
    `fetchError` is kept separate from `report`: on failure the last numbers
-   stay visible with the error next to them.
+   stay visible with the error next to them. The history fetch runs the
+   same pattern independently (`historyPending`, own 25 s watchdog with
+   `signal(9)`) and degrades silently — a failed sparkline must never
+   produce an error card; the live fetch owns the error path. The stats
+   fetch (`statsPending`/`statsProcess`) is a third copy of the pattern
+   with the same silent-degradation rule.
 
 ## Key Directories
 
@@ -54,7 +79,7 @@ refresh() (poll / open / r / R / right-click / middle-click)
 | `Usage.js` | Pure normalization: raw JSON → render model; no provider knowledge |
 | `Providers.js` | Registry: imports `providers/*.js`, `PLUGINS`/`BY_ID`, `resolve(id)`, `fallbackName(id)`, `stripTokens(id, name)` |
 | `providers/` | One descriptor per provider whose name spelling or behavior deviates from derivation (5 files; `anthropic`, `google-antigravity` deliberately none) |
-| `usage.sh` | PATH-robust wrapper around `omp usage --json`, timeouts, JSON guarantee |
+| `usage.sh` | PATH-robust wrapper: `omp usage --json`, `history` → `--history --days 7`, `stats` → `omp stats --json`; timeouts, JSON guarantee |
 | `tests/` | `bun test` suites + `load.js` (QML-library loader for Bun) |
 | `scripts/analyze.js` | Static analysis (`bun scripts/analyze.js`): rules the test suite cannot express — see below |
 | `.omp/skills/` | Two project skills: `omp-quota-provider` (add a provider) and `omp-quota-plugin` (the widget itself — settings, lifecycle, colours, `usage.sh`). Both are required; the `skill` rule enforces existence, frontmatter and API references |

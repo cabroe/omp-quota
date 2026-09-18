@@ -11,6 +11,12 @@
 # „kaputte Ausgabe" unterscheiden muss. Fehler geben {"error": "..."} aus
 # und beenden mit 1; die Meldung trägt omps eigenes stderr, denn „exit 1"
 # allein hat nie verraten, ob ein Token abgelaufen oder DNS tot war.
+#
+# Ohne Argument der Live-Report. Mit `history` stattdessen omps stündliche
+# Verlaufssnapshots (`--history --days 7`) — Grundlage der Sparklines im
+# Popup. Mit `stats` die Session-Statistik (`omp stats --json`, letzte
+# 24 h) für die Verbrauchs-Ansicht. Alle Modi teilen sich Guards und
+# JSON-Garantie.
 
 set -o pipefail
 
@@ -87,12 +93,15 @@ find_omp() {
   return 1
 }
 
+mode=live
 redact=0
 fresh=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --redact) redact=1 ;;
   --fresh) fresh=1 ;;
+  history) mode=history ;;
+  stats) mode=stats ;;
   *) ;;
   esac
   shift
@@ -120,14 +129,27 @@ run_omp() {
 
 errfile=$(mktemp 2>/dev/null) || errfile=""
 
-# Ein erzwungener Refresh verwirft zuerst omps gecachte Reports; die
-# Provider-APIs werden dann vom usage-Aufruf unten neu befragt. Ein
-# Fehlschlag hier ist unkritisch — ein alter Snapshot schlägt keinen.
-if ((fresh)); then
-  run_omp "$FRESH_INVALIDATE_TIMEOUT" usage invalidate >/dev/null 2>&1
+if [[ $mode == history ]]; then
+  # Trendmodus: omps eigene stündliche Snapshots aus der Aufzeichnung —
+  # ein DB-Lese, kein Provider-API-Rundtrip. --fresh wäre hier bedeutungs-
+  # los: die Verlaufszeilen gibt es schon, ein Invalidate würde nur den
+  # Live-Cache opfern, von dem der Trendmodus nichts erbt.
+  args=(usage --json --history --days 7)
+elif [[ $mode == stats ]]; then
+  # Verbrauchsmodus: omps Session-Statistik der letzten 24 h (omps eigener
+  # Default), inkl. der Präambel-Zeile "Synced ...", die die Sed-Pipeline
+  # unten ohnehin abschneidet. --redact hat hier nichts zu verbergen und
+  # --fresh keinen Cache, den es lohnte zu leeren.
+  args=(stats --json)
+else
+  # Ein erzwungener Refresh verwirft zuerst omps gecachte Reports; die
+  # Provider-APIs werden dann vom usage-Aufruf unten neu befragt. Ein
+  # Fehlschlag hier ist unkritisch — ein alter Snapshot schlägt keinen.
+  if ((fresh)); then
+    run_omp "$FRESH_INVALIDATE_TIMEOUT" usage invalidate >/dev/null 2>&1
+  fi
+  args=(usage --json)
 fi
-
-args=(usage --json)
 ((redact)) && args+=(--redact)
 
 # stdout bekommt denselben OOM-Schutz wie stderr: Ein ausartender oder
