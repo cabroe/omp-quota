@@ -184,11 +184,14 @@ Panel {
     // dabei geleert: onRedactChanged hat genau diesen Nachzug längst als
     // Anfrage gemerkt, und ihr Eintrag würde nach dem nächsten Prozessende
     // noch einen zweiten, redundanten Abruf mit derselben Einstellung
-    // auslösen.
+    // auslösen. Eine dabei gemerkte --fresh-Anfrage wandert in den
+    // Ersatzabruf — sonst degradierte der erzwungene "Cache leeren"-
+    // Rechtsklick still zum gecachten Poll.
     if (root.requestRedact !== root.redact) {
+      var fresh = root.queuedFresh
       root.queuedRefresh = false
       root.queuedFresh = false
-      root.refresh(false)
+      root.refresh(fresh)
       return
     }
 
@@ -278,7 +281,16 @@ Panel {
       root.failFetch("omp hat nach 25 s nicht geantwortet")
       // Ohne den Kill blockiert der Hänger jeden weiteren Abruf für immer,
       // weil refresh() bei laufendem Prozess nur noch in die Queue schreibt.
+      // running = false allein reicht NICHT: Quickshell setzt es in
+      // QProcess::terminate() um — SIGTERM an bash — und `running` bleibt
+      // true, bis finished feuert. bash deferiert ein SIGTERM aber, solange
+      // ein Vordergrund-Kind läuft (empirisch verifiziert), und timeout
+      // wartet ohne -k endlos auf ein TERM-ignorierendes Kind. Das SIGKILL
+      // trifft bash direkt; nur bash hält die stdout-Pipe, also feuert
+      // finished garantiert und die Queue zieht nach. signal() guardt selbst
+      // gegen einen bereits toten Prozess.
       usageProcess.running = false
+      usageProcess.signal(9)
     }
   }
 
@@ -467,7 +479,13 @@ Panel {
                 }
 
                 Item {
-                  width: Math.max(0, parent.width - parent.children[0].implicitWidth - providerMeta.implicitWidth)
+                  // providerMeta.width statt implicitWidth: der Text ist
+                  // auf 60 % der Breite gedeckelt und elidiert — der Spacer
+                  // muss mit der gezeichneten, nicht der vollen Breite
+                  // rechnen, sonst klebt der Meta-Text nicht an der rechten
+                  // Kante. parent.width ist vom Popup gesetzt, daher keine
+                  // Bindingschleife.
+                  width: Math.max(0, parent.width - parent.children[0].implicitWidth - providerMeta.width)
                   height: 1
                 }
 

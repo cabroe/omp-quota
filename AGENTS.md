@@ -33,8 +33,9 @@ refresh() (poll / open / r / R / right-click / middle-click)   render
 2. **Prozess:** `Process { id: usageProcess }` ruft `/bin/bash usage.sh` mit
    optional `--redact` und/oder `--fresh` auf. `usage.sh` lokalisiert `omp`
    (Hyprland-PATH ist nicht Login-PATH) und führt `omp usage --json` unter
-   `timeout 20` aus. Bei `--fresh` wird vorher `omp usage invalidate`
-   aufgerufen.
+   `timeout -k 2 20` aus (2 s KILL-Gnade für ein TERM-ignorierendes omp;
+   die KILL-Phase meldet exit 137 und wird wie 124 behandelt). Bei `--fresh`
+   wird vorher `omp usage invalidate` mit eigenem Kurz-Budget (3 s) aufgerufen.
 3. **JSON-Pfad:** `usage.sh` garantiert, dass stdout immer ein JSON-Objekt
    ist (im Fehlerfall `{"error": "..."}`, inklusive omps stderr). Eine
    Vorspann-Sed-Pipeline schneidet auf das erste `{` zu; ergibt das nichts,
@@ -154,8 +155,10 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
   `id.split(/[-_.]/)` zu "Some New Provider".
 - Regex-Escaping Pflicht beim Token-Strip (`token.replace(/[.*+?^${}()|
   [\]\\]/g, "\\$&")`).
-- `num(value)` als zentraler `Number()`-Wrapper, `clamp(value, lo, hi)`
-  für 0..1-Bounds.
+- `num(value)` als zentraler `Number()`-Wrapper — aber NICHT für
+  null/""/boolean: `Number(null)` & Co. sind 0, ohne den Guard würde ein
+  JSON-null als 0 % oder Reset „jetzt" erscheinen statt als „keine Angabe"
+  (NaN). `clamp(value, lo, hi)` für 0..1-Bounds.
 - Sortierreihenfolge NIE nach Füllstand (Liste würde bei jedem Refresh
   springen). Provider alphabetisch (`a.name.localeCompare(b.name)`),
   Limits nach `durationMs` aufsteigend.
@@ -188,16 +191,25 @@ nötig, QML-Fehler zeigen sich erst im `omarchy restart shell`.
   geschweifte Klammer enthält und die Sed-Pipeline leer läuft.
 - `json_string()` escapet per Parameter-Expansion, NICHT per `sed`:
   Zeilenumbrüche und ANSI-Escapes müssen raus, sonst entsteht kaputtes JSON.
-- `OMP_TIMEOUT=20` deckelt jeden omp-Aufruf; exit 124 wird als eigene
-  Meldung gemeldet. Die Panel-Frist (25 s) liegt darüber.
+- `OMP_TIMEOUT=20` deckelt den usage-Aufruf (`timeout -k 2 20`), das
+  `--fresh`-invalidate ein eigenes 3-s-Budget; exit 124 und 137 (KILL-Phase)
+  werden als Timeout-Meldung gemeldet — inklusive des bereits eingelesenen
+  stderr-Details. Die Panel-Frist (25 s) liegt über dem Normalfall; nur wenn
+  BEIDE `--fresh`-Aufrufe TERM ignorieren, übernimmt der Watchdog.
+- stdout wird beim Einlesen auf 5 MB gekappt (`head -c 5000000`), stderr
+  auf 2 KB — sonst kann ein ausartender omp die JSON-Garantie per OOM
+  brechen. Mit `set -o pipefail` überlebt der Exit-Status des Normallaufs
+  die Pipeline.
 - omps stderr wird über eine `mktemp`-Datei eingefangen und in die
   Fehlermeldung gehängt.
 - PATH-Suche in dieser Reihenfolge: `command -v omp`,
   `~/.local/share/mise/shims/omp`, `~/.local/bin/omp`,
   `~/.bun/bin/omp`, `/usr/local/bin/omp`, `/usr/bin/omp`, zuletzt
   `mise which omp`.
-- Vorspann-Sed: `sed -n '/^[[:space:]]*{/,$p'` schneidet Banner/Warnings
-  vor dem JSON ab.
+- Vorspann-Sed: `sed -n -E '/^[[:space:]]*\{(["}]|$)/,$p'` schneidet
+  Banner/Warnings vor dem JSON ab. Nach der `{` muss ein objektöffnendes
+  Zeichen folgen (`"`-Key, `}` oder Zeilenende) — sonst passierte ein
+  Text-Banner wie `{warn} ...` als angeblicher Payload.
 
 ### Manifest (`manifest.json`)
 
@@ -274,7 +286,14 @@ zusätzlichen Bootstrap-Code.
 - **Niemals** annehmen, `Process.onExited` feuert für nicht-startende
   Prozesse; stattdessen `onRunningChanged` auswerten + Watchdog.
 - **Niemals** einen hängenden Prozess nur abschreiben — der Watchdog MUSS
-  `running = false` setzen, sonst blockiert er jeden weiteren Abruf.
+  `running = false` setzen, sonst blockiert er jeden weiteren Abruf. Aber
+  AUCH das reicht allein nicht: Quickshell setzt `running = false` als
+  `QProcess::terminate()` um — SIGTERM an bash — und bash deferiert das,
+  solange ein Vordergrund-Kind läuft; `timeout` ohne `-k` wartet endlos auf
+  ein TERM-ignorierendes Kind. Der Watchdog setzt deshalb danach
+  `usageProcess.signal(9)`: SIGKILL an bash, die einzige Quelle der
+  stdout-Pipe — `finished` feuert garantiert, die Queue zieht nach.
+  `signal()` guardt selbst gegen einen bereits toten Prozess.
 - **Niemals** ein JS-Array als Repeater-Modell für animierte Inhalte —
   Delegates werden zerstört und `Behavior` greift beim Initialwert nicht.
 - **Niemals** JSON per `sed` escapen — Zeilenumbrüche und ANSI-Escapes

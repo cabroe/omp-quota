@@ -78,8 +78,9 @@ beforeEach(() => {
   mkdirSync(isolated);
   mkdirSync(join(root, "home"));
   // head deckelt das stderr-Intake in usage.sh (OOM-Schutz) und muss darum
-  // wie die anderen coreutils im isolierten PATH liegen.
-  for (const tool of ["sed", "mktemp", "rm", "timeout", "sleep", "head", "tr"]) {
+  // wie die anderen coreutils im isolierten PATH liegen; iconv sanitisiert
+  // zerschnittene Multibyte-Zeichen im Fehler-JSON.
+  for (const tool of ["sed", "mktemp", "rm", "timeout", "sleep", "head", "tr", "iconv"]) {
     symlinkSync(which(tool), join(isolated, tool));
   }
   // Fängt den letzten Zweig von find_omp ab: `mise which omp` würde sonst das
@@ -183,6 +184,72 @@ describe("usage.sh JSON-Garantie", () => {
     expect(exitCode).toBe(1);
     expect(jsonOk(stdout).error).toContain("hat nach 2 s nicht geantwortet");
   }, 15_000);
+
+  // omps stderr ist im Timeout-Fall die einzige Diagnose (Retry-Loops,
+  // API-Fehler) — die Meldung verwirft sie nicht mehr.
+  test("Timeout-Meldung trägt omps stderr-Detail", async () => {
+    makeOmp(`echo 'retrying request 1/10' >&2; sleep 30`);
+    const { exitCode, stdout } = await runUsage([], { script: makeFastUsageSh() });
+    expect(exitCode).toBe(1);
+    const parsed = jsonOk(stdout);
+    expect(parsed.error).toContain("hat nach 2 s nicht geantwortet");
+    expect(parsed.error).toContain("retrying request 1/10");
+  }, 15_000);
+
+  // Der Sed-Range verlangt nach der `{` ein objektöffnendes Zeichen. Ein
+  // Text-Banner wie "{warn} ..." passierte vorher als angeblicher Payload
+  // (Exit 0, invalides JSON).
+  test("Banner, der mit { beginnt, wird abgeschnitten, Payload bleibt", async () => {
+    makeOmp(`echo '{warn} banner starting with brace'; echo '{"reports":[]}'`);
+    const { exitCode, stdout } = await runUsage();
+    expect(exitCode).toBe(0);
+    expect(jsonOk(stdout)).toEqual({ reports: [] });
+  });
+
+  test("nur ein Brace-Banner: Fehler-JSON statt Müll auf stdout", async () => {
+    makeOmp(`echo '{warn} cache stale'`);
+    const { exitCode, stdout } = await runUsage();
+    expect(exitCode).toBe(1);
+    expect(jsonOk(stdout).error).toContain("lieferte kein JSON-Objekt");
+  });
+
+  // Eine C-Locale schneidet ${1:0:400} byteweise und zerteilt Multibyte —
+  // verwaiste Bytes machten das JSON byteseitig unlesbar. Strikter
+  // TextDecoder (fatal) ist der harte Beweis; JSON.parse allein wäre zu
+  // milde, weil Bun beim Lesen schon ersetzt.
+  test("Multibyte am 400-Byte-Schnitt unter LC_ALL=C bleibt valides UTF-8", async () => {
+    // 399 ASCII-Bytes, dann '中' (3 Bytes): der Schnitt bei 400 landet im
+    // ersten Byte des Zeichens und hinterlässt ein verwaistes 0xe4.
+    makeOmp(`printf 'A%.0s' {1..399}; printf '\\xe4\\xb8\\xad'; echo 'FEHLER'; exit 4`);
+    const proc = Bun.spawn([BASH, USAGE_SH], {
+      cwd: sandbox.root,
+      env: {
+        ...process.env,
+        HOME: sandbox.home,
+        PATH: sandbox.isolated,
+        LC_ALL: "C",
+        LANG: "C",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const bytes = await new Response(proc.stdout).bytes();
+    const exitCode = await proc.exited;
+    expect(exitCode).toBe(1);
+    expect(() => new TextDecoder("utf-8", { fatal: true }).decode(bytes)).not.toThrow();
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    expect(typeof parsed.error).toBe("string");
+  }, 15_000);
+
+  // stdout bekommt denselben OOM-Schutz wie stderr: jenseits von 5 MB wird
+  // gekappt — der Report geht verloren, aber es kommt ein Fehler-JSON statt
+  // eines OOM-Abbruchs.
+  test("riesiges stdout wird gekappt, Fehler-JSON bleibt die Antwort", async () => {
+    makeOmp(`head -c 6000000 /dev/zero | tr '\\0' 'x'; echo '{"reports":[]}'`);
+    const { exitCode, stdout } = await runUsage();
+    expect(exitCode).toBe(1);
+    expect(jsonOk(stdout).error).toContain("fehlgeschlagen");
+  }, 20_000);
 });
 
 describe("usage.sh Argumente", () => {

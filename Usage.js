@@ -75,6 +75,12 @@ function clamp(value, lo, hi) {
 }
 
 function num(value) {
+  // Number(null), Number("") und Number(false) sind alle 0 — ohne diesen
+  // Guard würde ein JSON-null in omps Report als 0% oder als Reset
+  // "jetzt" erscheinen, statt als "keine Angabe" durch NaN zu fallen.
+  // Numerische Strings ("0.3") und echte 0 bleiben unberührt.
+  if (value === null || value === "" || typeof value === "boolean")
+    return NaN;
   var n = Number(value);
   return isFinite(n) ? n : NaN;
 }
@@ -362,7 +368,9 @@ function collapseAccounts(providers) {
   var shared = "";
   var seen = 0;
   for (var i = 0; i < providers.length; i++) {
-    var account = providers[i].account;
+    // String-Guard: normalizeReport garantiert den String, aber ein
+    // direkter Aufrufer mit rohen Reports crashete an .length von undefined.
+    var account = String(providers[i].account || "");
     if (account.length === 0)
       continue;
     if (seen === 0) {

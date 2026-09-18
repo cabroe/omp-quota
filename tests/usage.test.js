@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 
 const USAGE_NAMES = [
   "parse",
+  "num",
   "providerName",
   "usedFraction",
   "limitTitle",
@@ -81,6 +82,29 @@ describe("usedFraction", () => {
     expect(usage.usedFraction({ usedFraction: 1.5 })).toBe(1);
     expect(usage.usedFraction({ usedFraction: -0.2 })).toBe(0);
   });
+
+  // JSON-null ist nicht "Feld fehlt": num(null) war vor dem Guard 0 und
+  // unterlief genau diesen Fallback.
+  test("explizites null fällt auf used/limit durch", () => {
+    expect(usage.usedFraction({ usedFraction: null, used: 30, limit: 100 })).toBe(0.3);
+  });
+});
+
+describe("num", () => {
+  test("null, leerer String und Boolean sind keine 0", () => {
+    expect(usage.num(null)).toBeNaN();
+    expect(usage.num("")).toBeNaN();
+    expect(usage.num(false)).toBeNaN();
+    expect(usage.num(true)).toBeNaN();
+  });
+
+  test("echte Werte und numerische Strings bleiben unberührt", () => {
+    expect(usage.num(0)).toBe(0);
+    expect(usage.num("0.3")).toBe(0.3);
+    expect(usage.num(-5)).toBe(-5);
+    expect(usage.num(undefined)).toBeNaN();
+    expect(usage.num("keine zahl")).toBeNaN();
+  });
 });
 
 describe("dedupe", () => {
@@ -101,6 +125,40 @@ describe("dedupe", () => {
 
   test("ohne sharedGroup bleibt jedes Limit eigenständig", () => {
     expect(usage.dedupe([rawLimit(), rawLimit()], [])).toHaveLength(2);
+  });
+
+  // Ein solo-Limit zwischen zwei Gruppentreffern darf den gespeicherten
+  // Gruppen-Index nicht verschieben — groups[group] wird vor dem Push
+  // gesetzt, der Test pinnt genau das.
+  test("Gruppen-Index bleibt korrekt, wenn ein solo-Limit dazwischenliegt", () => {
+    const out = usage.dedupe(
+      [
+        rawLimit({ id: "g1a", amount: { usedFraction: 0.1 }, scope: { sharedGroup: "g1" } }),
+        rawLimit({ id: "solo", amount: { usedFraction: 0.5 } }),
+        rawLimit({ id: "g1b", amount: { usedFraction: 0.9 }, scope: { sharedGroup: "g1" } }),
+      ],
+      [],
+    );
+    expect(out).toHaveLength(2);
+    expect(out[0].id).toBe("g1b");
+    expect(out[0].fraction).toBe(0.9);
+    expect(out[1].id).toBe("solo");
+  });
+
+  // Antigravity meldet pro Gruppe zwei Fenster; der Sieger bringt sein
+  // eigenes Fenster mit, die Sortierung in normalizeReport stellt die
+  // Reihenfolge danach wieder her.
+  test("Gruppensieger behält sein Fenster, auch bei gemischten Dauern", () => {
+    const out = usage.dedupe(
+      [
+        rawLimit({ id: "w", window: { label: "Weekly", durationMs: DAY, resetsAt: 5000 }, scope: { sharedGroup: "g" } }),
+        rawLimit({ id: "h", amount: { usedFraction: 0.9 }, window: { label: "5 Hour", durationMs: HOUR, resetsAt: 6000 }, scope: { sharedGroup: "g" } }),
+      ],
+      [],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe("h");
+    expect(out[0].title).toContain("5 Hour");
   });
 });
 
@@ -286,6 +344,16 @@ describe("planLabel / accountLabel", () => {
     expect(usage.scopeLabel({ models: ["video"], unavailableModels: ["video"] })).toBe("");
   });
 
+  // Non-Array-Felder werden ignoriert, nicht als Zeichenliste iteriert —
+  // ein Refactor mit Array.from würde aus "general" 7 Buchstaben-Modelle
+  // machen, und das ginge sonst unbemerkt durch.
+  test("models als String statt Array wird ignoriert", () => {
+    expect(usage.scopeLabel({ models: "general" })).toBe("");
+    expect(
+      usage.scopeLabel({ models: ["general"], unavailableModels: "general" }),
+    ).toBe("Modell general");
+  });
+
   test("E-Mail schlägt accountId, accountId wird auf 8 Zeichen gekürzt", () => {
     expect(usage.accountLabel({ email: "a@example.com", accountId: "1234567890" })).toBe(
       "a@example.com",
@@ -321,6 +389,19 @@ describe("collapseAccounts", () => {
 
   test("gar keine Konten", () => {
     expect(usage.collapseAccounts([{ account: "" }, { account: "" }])).toBe("");
+  });
+
+  // Roher Report statt normalizeReport-Output: fehlendes account-Feld darf
+  // nicht crashen (crashte vorher an .length von undefined). Es wird wie
+  // ein leeres Konto übersprungen — das einzige nicht-leare wandert in die
+  // Fußzeile.
+  test("fehlendes account-Feld wird wie ein leeres behandelt", () => {
+    expect(usage.collapseAccounts([{}, { account: "a@example.com" }])).toBe(
+      "a@example.com",
+    );
+    expect(usage.collapseAccounts([{ account: "a@example.com" }, {}])).toBe(
+      "a@example.com",
+    );
   });
 });
 
@@ -489,6 +570,18 @@ describe("parse", () => {
     const out = usage.parse("{}");
     expect(out.providers).toEqual([]);
     expect(out.error).toBe("");
+  });
+
+  // Der reports[i] || {}-Guard: ein null-Element wird übersprungen, die
+  // echten Provider daneben laufen weiter (normalizeReport(null) würde
+  // ohne Guard bei entry.amount werfen).
+  test("null-Elemente im reports-Array werden übersprungen", () => {
+    const out = usage.parse(
+      JSON.stringify({ generatedAt: 1000, reports: [null, rawProvider()] }),
+    );
+    expect(out.error).toBe("");
+    expect(out.providers).toHaveLength(1);
+    expect(out.providers[0].id).toBe("zai");
   });
 });
 

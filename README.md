@@ -52,9 +52,11 @@ eigenständiges Plugin.
 3. **`--fresh`.** Verwirft zuerst omps Report-Cache, damit ein manueller
    Refresh die Provider-APIs wirklich neu befragt statt dieselben Zahlen aus
    dem Cache zu liefern.
-4. **Zeitlimit und Diagnose.** `timeout 20` deckelt den Aufruf, und omps
-   stderr steht in der Fehlermeldung. „exit 1" allein hat nie verraten, ob
-   ein Token abgelaufen oder DNS tot war.
+4. **Zeitlimit und Diagnose.** `timeout -k 2 20` deckelt den Aufruf (2 s
+   KILL-Gnade für ein TERM-ignorierendes omp), der Cache-Verwerfer bei
+   `--fresh` bekommt ein eigenes 3-s-Budget, und omps stderr steht in der
+   Fehlermeldung. „exit 1" allein hat nie verraten, ob ein Token abgelaufen
+   oder DNS tot war.
 
 `Usage.js` glättet vier Eigenheiten des Rohreports:
 
