@@ -242,7 +242,7 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
 | `Providers.js` | Registry: `PLUGINS`, `BY_ID`, `resolve(id)`, `fallbackName(id)`, `stripTokens(id, name)` |
 | `providers/*.js` | One `descriptor` per deviating provider (`id`, `name`, optional `unlimitedWindows`) |
 | `usage.sh` | omp invocation, PATH resolution, timeout, JSON guarantee |
-| `manifest.json` | Plugin identity + settings schema; `defaults` and `schema[]` MUST stay in sync (same keys, same `defaultValue`, `min`/`max`/`step` where relevant) |
+| `manifest.json` | Plugin identity + settings schema; `defaults` and `schema[]` MUST stay in sync (same keys, same `defaultValue`, `min`/`max`/`step` where relevant). Also the single source for the version shown bottom-right in the popup — `Panel.qml` reads it through a `FileView`, never as a QML literal |
 | `tests/load.js` | Loads QML `.pragma library` files for Bun |
 | `.omp/skills/omp-quota-provider/SKILL.md` | Provider-addition procedure incl. acceptance |
 

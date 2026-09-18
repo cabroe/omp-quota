@@ -97,6 +97,27 @@ Panel {
     return index >= 0 && index < list.length ? list[index] : null
   }
 
+  // Version aus manifest.json statt als Literal im QML: zwei Stellen, die
+  // dieselbe Zahl behaupten, laufen beim nächsten Release auseinander, und
+  // das Manifest ist die Quelle, die Omarchy selbst liest. Leer, solange
+  // die Datei nicht geladen ist — die Fußzeile blendet die Zeile dann aus.
+  property string pluginVersion: ""
+
+  FileView {
+    path: decodeURIComponent(String(Qt.resolvedUrl("manifest.json")).replace(/^file:\/\//, ""))
+    watchChanges: false
+    printErrors: false
+    onLoaded: {
+      // Ein kaputtes Manifest darf das Widget nicht mitnehmen: die Version
+      // ist Beiwerk, die Kontingente sind der Zweck.
+      try {
+        root.pluginVersion = String(JSON.parse(text()).version || "")
+      } catch (e) {
+        root.pluginVersion = ""
+      }
+    }
+  }
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -540,14 +561,41 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Text {
-              textFormat: Text.PlainText
+            // Hinweise links, Version rechts auf derselben Grundlinie. Als
+            // Item statt Row, weil der Hinweistext umbrechen muss (eine Row
+            // mit elide ließe genau die Information verschwinden, die man
+            // hier nachschlägt) und die Version dabei rechts oben bleibt.
+            Item {
               width: parent.width
-              text: "r neu laden · R Cache leeren"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
+              implicitHeight: Math.max(keyHints.implicitHeight, versionLabel.implicitHeight)
+
+              Text {
+                id: keyHints
+                textFormat: Text.PlainText
+                anchors.left: parent.left
+                anchors.right: versionLabel.left
+                anchors.rightMargin: Style.space(8)
+                anchors.top: parent.top
+                text: "r neu laden · R Cache leeren"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Text {
+                id: versionLabel
+                textFormat: Text.PlainText
+                anchors.right: parent.right
+                anchors.top: parent.top
+                // Ohne geladenes Manifest keine leere Spalte reservieren.
+                visible: root.pluginVersion !== ""
+                width: visible ? implicitWidth : 0
+                text: "v" + root.pluginVersion
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
           }
         }
