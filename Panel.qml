@@ -596,6 +596,11 @@ Panel {
     // Gruppenabstand (~2× Zeilenabstand) nur dort, wo Gruppen wechseln, und
     // das Raster innerhalb eines Providers bleibt eng.
     topPadding: Style.space(12)
+    // Fußplatz unter dem letzten Meter eines Providers. Eigenes Padding
+    // statt eines größeren topPadding: die Lücke soll zum abgeschlossenen
+    // Block gehören, nicht vor den nächsten wandern — sonst klebt der
+    // letzte Provider an der Fußzeile, während alle anderen Luft haben.
+    bottomPadding: Style.space(8)
     // Während eines Abrufs, der Provider entfernt, kann der Index kurz ins
     // Leere zeigen.
     visible: providerBlock.provider !== null

@@ -115,6 +115,12 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
 - Sibling elements are addressed by `id`, never `parent.children[N]`.
 - Reused layout terms get one name (`titleRow.tailWidth`) — title width and
   spacer must subtract the identical value.
+- Group spacing belongs to the block, not to the surrounding `content`
+  spacing: `ProviderSection` and the footer carry their own `topPadding`,
+  and `ProviderSection` additionally a `bottomPadding`. Raising
+  `content.spacing` instead would pull hero, error card and footer apart by
+  the same amount, and a larger `topPadding` alone would leave the last
+  provider glued to the footer while every other block has air.
 - Reusable blocks are `component`s at file end (`ProviderSection`,
   `LimitRow`).
 - Every bar is tinted, not just the tight ones: `colorFor(fraction,
