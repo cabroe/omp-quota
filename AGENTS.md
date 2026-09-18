@@ -117,6 +117,22 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   spacer must subtract the identical value.
 - Reusable blocks are `component`s at file end (`ProviderSection`,
   `LimitRow`).
+- Fill colour is a three-step ramp through one function, `colorFor(fraction,
+  exhausted)`: neutral → `caution` → `urgent`, plus `urgent` whenever
+  `exhausted` (the fraction is capped at 1, so an overdrawn quota would
+  otherwise look merely full) and neutral for unlimited rows
+  (`fraction < 0`). `warnAt` is derived as `alarmAt - 0.15` (floor 0.05,
+  and always at least 0.05 below `alarmAt`) — never a second setting: a
+  slider that can cross the alarm threshold is a bug source without payoff.
+  `caution` is mixed from `foreground` and `urgent` (62 %), because the
+  palette ships only foreground/accent/urgent/muted and no warning hue;
+  a hard-coded amber would break in half the themes.
+- A limit row derives one `tone` and both the percent text and the meter
+  read it — they must never disagree. The meter carries `Behavior on color`
+  alongside `Behavior on width`, otherwise a growing bar switches step
+  colour in one frame and reads as a rebuild.
+- Literal opacities are declared as properties (`metaOpacity`), not inlined;
+  the `panel-hardcoding` rule flags bare values above 0.5.
 - Reactive clock: `nowMs` property + 30 s timer running only while
   `opened || hasError` (the tooltip reads the aging of the last fetch).
   Do not solve this via a hover signal — that depends on Qt-internal signal

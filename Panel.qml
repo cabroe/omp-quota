@@ -102,6 +102,29 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color track: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.14)
+  // Zugangsangabe in der Provider-Kopfzeile: nachrangig gegenüber dem
+  // Namen, aber keine Fußnote — deshalb gedämpft statt `dim`.
+  readonly property real metaOpacity: 0.75
+  // Vorwarnstufe: zwischen `warnAt` und `alarmAt` ist das Kontingent eng,
+  // aber noch nicht im Alarm. Vorher sprang die Farbe binär von
+  // `foreground` auf `urgent` — ein Fenster bei 88 % sah aus wie eines bei
+  // 12 %, und die Warnung kam erst, wenn kaum noch Luft war.
+  //
+  // Die Schwelle hängt an `alarmAt` statt an einem eigenen Setting: wer den
+  // Alarm nach vorn zieht, will auch früher gewarnt werden, und ein zweiter
+  // Regler, der über dem ersten liegen kann, ist eine Fehlerquelle ohne
+  // Gegenwert. Der Abstand bleibt mindestens 5 Punkte, sonst verschwindet
+  // das Band bei kleinen Schwellen ganz.
+  readonly property real warnAt: Math.max(0.05, Math.min(alarmAt - 0.05, alarmAt - 0.15))
+  // Theme-treu gemischt statt hart kodiert: die Paletten liefern nur
+  // foreground/accent/urgent/muted, kein Warngelb. Der Mittelwert liegt
+  // sichtbar neben beiden Enden und bleibt in jedem Theme lesbar, weil er
+  // aus genau den Farben besteht, die das Theme selbst gewählt hat.
+  readonly property color caution: Qt.rgba(
+    foreground.r + (urgent.r - foreground.r) * 0.62,
+    foreground.g + (urgent.g - foreground.g) * 0.62,
+    foreground.b + (urgent.b - foreground.b) * 0.62,
+    1)
 
   readonly property string barLabel: {
     if (hasError)
@@ -126,8 +149,18 @@ Panel {
     return hasError ? text + " (Stand " + Usage.agoText(report.generatedAt, nowMs) + ", Abruf fehlgeschlagen)" : text
   }
 
-  function colorFor(fraction) {
-    return isFinite(fraction) && fraction >= root.alarmAt ? root.urgent : root.foreground
+  // Ein Füllstand, drei Stufen: normal, eng, Alarm. Erschöpft ist immer
+  // Alarm, unabhängig vom Füllstand — `fraction` ist auf 1 gedeckelt, ein
+  // überzogenes Kontingent sähe sonst aus wie ein gerade eben volles.
+  // Unbegrenzte Fenster (`fraction < 0`) bleiben neutral.
+  function colorFor(fraction, exhausted) {
+    if (exhausted === true)
+      return root.urgent
+    if (!isFinite(fraction) || fraction < 0)
+      return root.foreground
+    if (fraction >= root.alarmAt)
+      return root.urgent
+    return fraction >= root.warnAt ? root.caution : root.foreground
   }
 
   // `fresh` verwirft zuerst omps Report-Cache, damit die Provider-APIs
@@ -410,7 +443,9 @@ Panel {
               Text {
                 textFormat: Text.PlainText
                 text: root.glyph
-                color: root.alarming || root.hasError ? root.urgent : root.foreground
+                // Fehler schlägt alles; sonst trägt das Glyph dieselbe
+                // Stufe wie das knappste Kontingent.
+                color: root.hasError ? root.urgent : root.colorFor(root.worst, root.exhausted)
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
               }
@@ -579,7 +614,7 @@ Panel {
         foreground: root.foreground
         fontFamily: root.fontFamily
         font.bold: false
-        opacity: 0.75
+        opacity: root.metaOpacity
         elide: Text.ElideRight
         // Der Providername hat Vorrang, wenn der Platz knapp wird.
         width: Math.min(implicitWidth, parent.width * 0.6)
@@ -610,6 +645,8 @@ Panel {
     // gerade eben volles.
     readonly property bool exhausted: limit ? limit.exhausted === true : false
     readonly property bool alarming: exhausted || (isFinite(fraction) && fraction >= root.alarmAt)
+    // Eine Farbe pro Zeile: Prozent und Meter dürfen nie auseinanderlaufen.
+    readonly property color tone: root.colorFor(fraction, exhausted)
     readonly property string resetText: limit ? Usage.untilText(limit.resetsAt, root.nowMs) : ""
     // Status zuerst, dann der Absolutwert — letzterer nur, wo die Einheit
     // keine Prozent sind und der Prozentwert die Zahl verschweigt.
@@ -683,7 +720,7 @@ Panel {
         id: limitPercent
         textFormat: Text.PlainText
         text: limitRow.limit ? limitRow.limit.percentText : "—"
-        color: limitRow.alarming ? root.urgent : root.foreground
+        color: limitRow.tone
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         font.bold: limitRow.alarming
@@ -712,12 +749,19 @@ Panel {
         radius: meterTrack.radius
         width: meterTrack.width * Math.max(0, Math.min(1, limitRow.fraction))
         visible: limitRow.fraction >= 0
-        color: limitRow.alarming ? root.urgent : root.foreground
+        color: limitRow.tone
 
         Behavior on width {
           NumberAnimation {
             duration: 160
             easing.type: Easing.OutCubic
+          }
+        }
+        // Der Farbsprung beim Stufenwechsel wird mitgeführt: ein Meter, der
+        // wächst und dabei hart umschaltet, liest sich wie ein Neuaufbau.
+        Behavior on color {
+          ColorAnimation {
+            duration: 160
           }
         }
       }

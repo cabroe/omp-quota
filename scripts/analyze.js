@@ -246,7 +246,9 @@ function checkPanelHardcoding(root, addFinding) {
   // 2) Inline-Farbe jenseits von `transparent` / Theme-Bindings.
   const colorRe = /\bcolor\s*:\s*("(?!transparent")[^"]+"|'#[0-9a-fA-F]+'|#[0-9a-fA-F]+)/;
 
-  const opacityAllowlist = new Set([582]); // ProviderSection.meta opacity: 0.75
+  // Keine Zeilennummern-Allowlist: die driftet bei jeder Einfügung über der
+  // Stelle und meldete dann eine längst benannte Konstante erneut. Wer eine
+  // Opazität braucht, deklariert sie als Property (siehe `metaOpacity`).
 
   lines.forEach((line, idx) => {
     const lineNo = idx + 1;
@@ -263,7 +265,7 @@ function checkPanelHardcoding(root, addFinding) {
         `Panel.qml:${lineNo}`);
     }
     const op = line.match(opacityRe);
-    if (op && Number(op[1]) > 0.5 && !opacityAllowlist.has(lineNo)) {
+    if (op && Number(op[1]) > 0.5) {
       addFinding("panel-hardcoding", SEVERITY.warn,
         `opacity: ${op[1]} hartkodiert — sollte benannt sein`,
         `Panel.qml:${lineNo}`);
