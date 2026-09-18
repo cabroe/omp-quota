@@ -4,7 +4,7 @@
 // direkt rendern kann. Reine Funktionen, keine QML-Abhängigkeiten — damit
 // derselbe Code mit `bun Usage.test.js` gegen echte omp-Ausgaben läuft.
 //
-// Der Rohreport hat drei Eigenheiten, die hier verschwinden:
+// Der Rohreport hat vier Eigenheiten, die hier verschwinden:
 //
 //  1. Mengenangaben sind uneinheitlich. Anthropic liefert used/limit/unit
 //     "percent", ZAI liefert für Token-Fenster nur `usedFraction`. Einzig
@@ -15,6 +15,9 @@
 //  3. Labels verdoppeln Provider- und Fenstername ("ZAI 5 Hours Token
 //     Quota" im Fenster "5 Hours"). Der Provider steht schon in der
 //     Abschnittsüberschrift.
+//  4. Dasselbe Konto steht in jedem Provider-Report. Viermal dieselbe
+//     E-Mail (im Redaktionsmodus viermal "ca*") ist Rauschen, also wandert
+//     ein providerübergreifend gleiches Konto nach `sharedAccount`.
 
 // Anzeigename je Provider plus die Tokens, die in einem Limit-Label
 // redundant sind, weil der Provider bereits darüber steht.
@@ -26,6 +29,30 @@ var PROVIDERS = {
   "minimax-code": { name: "MiniMax Code", strip: ["MiniMax"] },
   "openrouter": { name: "OpenRouter", strip: ["OpenRouter"] },
   "github-copilot": { name: "GitHub Copilot", strip: ["GitHub", "Copilot"] }
+};
+
+// omps Statusvokabular, aus der Quelle der Zuordnung in der omp-Binary:
+// kein Restkontingent -> "exhausted", bis 10 % Rest -> "warning", ohne
+// Angabe -> "unknown". "ok" braucht kein Etikett, der Prozentwert steht
+// schon daneben.
+var STATUS_LABELS = {
+  "ok": "",
+  "warning": "fast leer",
+  "exhausted": "erschöpft",
+  "unknown": "unbekannt"
+};
+
+// Einheiten, in denen omp zählt. Unbekannte Einheit wird unverändert
+// durchgereicht — falsch übersetzt ist schlechter als englisch.
+var UNITS = {
+  "request": "Anfragen",
+  "requests": "Anfragen",
+  "token": "Tokens",
+  "tokens": "Tokens",
+  "credit": "Credits",
+  "credits": "Credits",
+  "message": "Nachrichten",
+  "messages": "Nachrichten"
 };
 
 function providerName(id) {
@@ -52,6 +79,34 @@ function num(value) {
   return isFinite(n) ? n : NaN;
 }
 
+// "1 Zugang" / "2 Zugänge". Ein hart singulares Label ist bei zwei Einträgen
+// schlicht falsch.
+function plural(count, one, many) {
+  var n = num(count);
+  if (!isFinite(n))
+    return "";
+  return n + " " + (n === 1 ? one : many);
+}
+
+// Kompakte Zahl mit deutschem Dezimalkomma: 850, 1,2k, 12k, 4,1M. Token-
+// Fenster reden in Millionen, Request-Fenster in Dutzenden.
+function compact(value) {
+  var n = num(value);
+  if (!isFinite(n))
+    return "";
+  var abs = Math.abs(n);
+  if (abs < 1000)
+    return String(Math.round(n));
+  if (abs < 1000000)
+    return decimal(n / 1000, abs < 10000) + "k";
+  return decimal(n / 1000000, true) + "M";
+}
+
+function decimal(value, withFraction) {
+  var text = withFraction ? value.toFixed(1) : String(Math.round(value));
+  return text.replace(".", ",").replace(/,0$/, "");
+}
+
 // Anteil des verbrauchten Kontingents als 0..1, oder -1 wenn der Provider
 // dazu nichts sagt. `usedFraction` ist das einzige Feld, das jeder Provider
 // liefert; used/limit sind der Fallback, wenn eine künftige Version die
@@ -70,6 +125,28 @@ function usedFraction(amount) {
   if (isFinite(used) && isFinite(limit) && limit > 0)
     return clamp(used / limit, 0, 1);
   return -1;
+}
+
+// Der Absolutwert, aber nur wo er mehr sagt als der Prozentwert: bei
+// `unit: "percent"` wiederholt er ihn bloß. Z.ai zählt Zread in Anfragen,
+// da ist "1/100 Anfragen" die eigentliche Aussage hinter "1 %".
+function amountText(amount) {
+  var meta = amount || {};
+  var unit = String(meta.unit || "").trim().toLowerCase();
+  if (unit.length === 0 || unit === "percent")
+    return "";
+  var used = num(meta.used);
+  var limit = num(meta.limit);
+  if (!isFinite(used) || !isFinite(limit) || limit <= 0)
+    return "";
+  var name = UNITS[unit];
+  return compact(used) + "/" + compact(limit) + " " + (name !== undefined ? name : unit);
+}
+
+function statusLabel(status) {
+  var key = String(status || "ok").trim().toLowerCase();
+  var known = STATUS_LABELS[key];
+  return known !== undefined ? known : key;
 }
 
 // Entfernt aus einem Limit-Label alles, was der Kontext schon hergibt: den
@@ -111,23 +188,26 @@ function limitTitle(label, windowLabel, strip) {
   return subject + " · " + window;
 }
 
-// Eine Zeile im Panel: Titel, Füllstand, Reset-Zeitpunkt.
+// Eine Zeile im Panel: Titel, Füllstand, Absolutwert, Status, Reset.
 function normalizeLimit(entry, strip) {
   var amount = entry.amount || {};
   var window = entry.window || {};
   var fraction = usedFraction(amount);
+  // omp markiert ein erschöpftes Kontingent über `status`. Das ist die
+  // einzige Stelle, an der ein Überziehen sichtbar wird: `fraction` ist auf
+  // 1 begrenzt, weil der Meter nicht über den Rand laufen darf.
+  var status = String(entry.status || "ok").trim().toLowerCase() || "ok";
   return {
     id: String(entry.id || ""),
     title: limitTitle(entry.label, window.label, strip),
     fraction: fraction,
     percentText: fraction >= 0 ? Math.round(fraction * 100) + "%" : "—",
-    unit: String(amount.unit || ""),
+    amountText: amountText(amount),
     resetsAt: num(window.resetsAt),
     durationMs: num(window.durationMs),
-    // omp markiert ein erschöpftes oder gesperrtes Kontingent über `status`;
-    // alles außer "ok" ist eine Ansage, unabhängig vom Füllstand.
-    status: String(entry.status || "ok"),
-    degraded: String(entry.status || "ok") !== "ok"
+    status: status,
+    statusLabel: statusLabel(status),
+    exhausted: status === "exhausted"
   };
 }
 
@@ -167,35 +247,11 @@ function byWindow(a, b) {
   return a.title.localeCompare(b.title);
 }
 
-// Zwei Werte sagen dasselbe, wenn sie gleich sind — oder wenn einer die
-// redigierte Kurzform des anderen ist. `omp --redact` kürzt auf ein
-// eindeutiges Präfix mit Stern ("free" -> "fr*"), und ohne diese Prüfung
-// stünde im Redaktionsmodus "free · fr*" statt nur "free".
-function sameValue(a, b) {
-  var left = String(a || "").trim().toLowerCase();
-  var right = String(b || "").trim().toLowerCase();
-  if (left === right)
-    return true;
-  if (right.charAt(right.length - 1) === "*" && left.indexOf(right.slice(0, -1)) === 0)
-    return true;
-  if (left.charAt(left.length - 1) === "*" && right.indexOf(left.slice(0, -1)) === 0)
-    return true;
-  return false;
-}
-
-// Plan- und Kontozeile. `planType` ist die belastbare Angabe; `orgName`
-// wiederholt sie bei manchen Providern nur, dann bringt es nichts.
+// Planzeile. Nur `planType` ist eine Planangabe; `orgName` ist bei
+// Consumer-Accounts der Name der Person (Anthropic liefert kein planType
+// und hätte sonst "Max Mustermann" als Plan angezeigt).
 function planLabel(metadata) {
-  var meta = metadata || {};
-  var plan = String(meta.planType || "").trim();
-  var org = String(meta.orgName || "").trim();
-  if (plan.length > 0 && org.length > 0 && !sameValue(org, plan))
-    return plan + " · " + org;
-  if (plan.length > 0)
-    return plan;
-  if (org.length > 0)
-    return org;
-  return "";
+  return String((metadata || {}).planType || "").trim();
 }
 
 function accountLabel(metadata) {
@@ -216,10 +272,10 @@ function normalizeReport(report) {
 
   var worst = -1;
   var worstTitle = "";
-  var degraded = false;
+  var exhausted = false;
   for (var i = 0; i < limits.length; i++) {
-    if (limits[i].degraded)
-      degraded = true;
+    if (limits[i].exhausted)
+      exhausted = true;
     if (limits[i].fraction > worst) {
       worst = limits[i].fraction;
       worstTitle = limits[i].title;
@@ -235,7 +291,7 @@ function normalizeReport(report) {
     limits: limits,
     worst: worst,
     worstTitle: worstTitle,
-    degraded: degraded,
+    exhausted: exhausted,
     // Prepaid-Provider melden Reset-Guthaben statt eines Fensters.
     resetCredits: report.resetCredits && isFinite(num(report.resetCredits.availableCount))
       ? num(report.resetCredits.availableCount)
@@ -243,22 +299,46 @@ function normalizeReport(report) {
   };
 }
 
+// Ein Konto, das für alle Provider dasselbe ist, gehört einmal in die
+// Fußzeile und nicht in jede Abschnittsüberschrift. Bei mehreren Konten
+// bleibt es je Provider stehen — dann unterscheidet es sie.
+function collapseAccounts(providers) {
+  var shared = "";
+  var seen = 0;
+  for (var i = 0; i < providers.length; i++) {
+    var account = providers[i].account;
+    if (account.length === 0)
+      continue;
+    if (seen === 0) {
+      shared = account;
+      seen = 1;
+    } else if (account !== shared) {
+      return "";
+    }
+  }
+  if (seen === 0)
+    return "";
+  for (var j = 0; j < providers.length; j++)
+    providers[j].account = "";
+  return shared;
+}
+
 // Der Report als Ganzes. `error` ist gesetzt, wenn usage.sh nichts holen
 // konnte — das Panel zeigt dann den Fehler statt einer leeren Liste.
 function parse(raw) {
   var text = String(raw || "").trim();
   if (text.length === 0)
-    return { error: "Keine Antwort von omp", providers: [], worst: -1, generatedAt: NaN };
+    return failed("Keine Antwort von omp");
 
   var data;
   try {
     data = JSON.parse(text);
   } catch (e) {
-    return { error: "Antwort von omp ist kein JSON", providers: [], worst: -1, generatedAt: NaN };
+    return failed("Antwort von omp ist kein JSON");
   }
 
   if (data && typeof data.error === "string" && data.error.length > 0)
-    return { error: data.error, providers: [], worst: -1, generatedAt: NaN };
+    return failed(data.error);
 
   var reports = data && data.reports instanceof Array ? data.reports : [];
   var providers = [];
@@ -277,7 +357,10 @@ function parse(raw) {
   var worst = -1;
   var worstProvider = "";
   var worstTitle = "";
+  var exhausted = false;
   for (var p = 0; p < providers.length; p++) {
+    if (providers[p].exhausted)
+      exhausted = true;
     if (providers[p].worst > worst) {
       worst = providers[p].worst;
       worstProvider = providers[p].name;
@@ -289,11 +372,30 @@ function parse(raw) {
     error: "",
     generatedAt: num(data.generatedAt),
     providers: providers,
+    sharedAccount: collapseAccounts(providers),
     worst: worst,
     worstProvider: worstProvider,
     worstTitle: worstTitle,
+    exhausted: exhausted,
     withoutUsage: data.accountsWithoutUsage instanceof Array ? data.accountsWithoutUsage.length : 0,
     disabled: data.disabledCredentials instanceof Array ? data.disabledCredentials.length : 0
+  };
+}
+
+// Ein Fehlerreport hat dieselbe Form wie ein guter, damit das Panel nicht
+// gegen fehlende Felder prüfen muss.
+function failed(message) {
+  return {
+    error: message,
+    generatedAt: NaN,
+    providers: [],
+    sharedAccount: "",
+    worst: -1,
+    worstProvider: "",
+    worstTitle: "",
+    exhausted: false,
+    withoutUsage: 0,
+    disabled: 0
   };
 }
 

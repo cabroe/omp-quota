@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "omp Kontingente",
-    "description": "Ein Bar-Wert und ein Popup: Füllstand, Reset-Countdown und Plan für jedes Kontingent, das omp bei Anthropic, Z.ai, Google Antigravity, MiniMax und OpenAI Codex kennt.",
+    "description": "Ein Bar-Wert und ein Popup: Füllstand, Reset-Countdown und Plan für jedes Kontingent, das omp bei Anthropic, Z.ai, Google Antigravity, MiniMax Code, OpenAI Codex, OpenRouter und GitHub Copilot kennt.",
     "category": "AI",
     "aliases": [
       "omp",

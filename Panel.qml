@@ -49,11 +49,12 @@ Panel {
   readonly property bool redact: settings ? settings.redact === true : false
 
   // ------------------------------------------------------------------ Daten
-  property var report: ({ error: "", providers: [], worst: -1, generatedAt: NaN })
+  property var report: Usage.failed("")
   property bool loading: false
   property bool loadedOnce: false
   // Ein Abruf läuft und hat noch nichts geliefert. Trennt "wird geladen" von
-  // "ist stillschweigend gescheitert".
+  // "ist stillschweigend gescheitert" — und entscheidet, ob eine Antwort
+  // überhaupt noch erwartet wird.
   property bool pending: false
   // Fehler des letzten Abrufs, getrennt vom Report: so bleiben die Zahlen
   // der letzten erfolgreichen Messung sichtbar, während der Fehler daneben
@@ -63,11 +64,38 @@ Panel {
   // sich bewegen, und eine Funktion allein löst keine Neuauswertung aus.
   property double nowMs: Date.now()
 
+  // Eine Anfrage, die während eines laufenden Abrufs kommt, wird gemerkt und
+  // danach ausgeführt. Sie fallen zu lassen heißt: Rechtsklick, `R` und ein
+  // Wechsel der Redaktion sind im Abrufzeitfenster wirkungslos, ohne dass
+  // irgendwas davon sichtbar wird.
+  property bool queuedRefresh: false
+  property bool queuedFresh: false
+  // Mit welcher Redaktionseinstellung der laufende Abruf gestartet wurde.
+  // Die Redaktion passiert in omp, also entscheidet der Aufruf, nicht die
+  // Anzeige — ein Report von vorher zeigt genau die Konten, die gerade
+  // verborgen werden sollen.
+  property bool requestRedact: false
+
   readonly property string errorText: fetchError !== "" ? fetchError : String(report.error || "")
   readonly property bool hasError: errorText !== ""
   readonly property real worst: Number(report.worst)
-  readonly property bool alarming: worst >= alarmAt
+  readonly property bool exhausted: report.exhausted === true
+  readonly property bool alarming: worst >= alarmAt || exhausted
   readonly property string collector: decodeURIComponent(String(Qt.resolvedUrl("usage.sh")).replace(/^file:\/\//, ""))
+
+  // Über den Index statt über das Array iterieren: `report` wird bei jedem
+  // Abruf komplett ersetzt, und ein neues Array zerstört jeden Repeater-
+  // Delegate. Ein neu gebautes Meter animiert nicht (Behavior greift beim
+  // Initialwert nicht) und die Liste baut sich bei jedem Poll neu auf.
+  // Index-Identität ist hier tragfähig, weil die Reihenfolge deterministisch
+  // und ausdrücklich nicht füllstandsabhängig ist.
+  readonly property var providers: report.providers instanceof Array ? report.providers : []
+  readonly property int providerCount: providers.length
+
+  function providerAt(index) {
+    var list = root.providers
+    return index >= 0 && index < list.length ? list[index] : null
+  }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -90,6 +118,10 @@ Panel {
     if (!isFinite(worst) || worst < 0)
       return hasError ? "omp: " + errorText : "omp-Kontingente"
     var text = "omp: " + Math.round(worst * 100) + "% — " + report.worstProvider + " · " + report.worstTitle
+    // Ein erschöpftes Kontingent ist die Ansage, nicht der Prozentwert: der
+    // steht bei 100 % und sagt nicht, dass gerade nichts mehr geht.
+    if (exhausted)
+      text += " (Kontingent erschöpft)"
     // Mit Fehler daneben: die Zahl gilt weiter, sie ist nur nicht mehr neu.
     return hasError ? text + " (Stand " + Usage.agoText(report.generatedAt, nowMs) + ", Abruf fehlgeschlagen)" : text
   }
@@ -102,13 +134,22 @@ Panel {
   // wirklich neu befragt werden. Ohne das liefert ein Refresh innerhalb des
   // Cache-Fensters dieselben Zahlen zurück.
   function refresh(fresh) {
-    if (usageProcess.running)
+    if (usageProcess.running) {
+      root.queuedRefresh = true
+      // `fresh` gewinnt: ein Rechtsklick darf nicht zum normalen Abruf
+      // degradieren, nur weil gerade gepollt wurde.
+      root.queuedFresh = root.queuedFresh || fresh === true
       return
-    var args = [root.collector]
+    }
+    // Der Aufruf läuft über /bin/bash statt über das Skript selbst. Damit
+    // fällt das Ausführungsbit als Fehlerquelle weg, und der Host macht es
+    // an jeder vergleichbaren Stelle genauso.
+    var args = ["/bin/bash", root.collector]
     if (root.redact)
       args.push("--redact")
     if (fresh === true)
       args.push("--fresh")
+    root.requestRedact = root.redact
     usageProcess.command = args
     root.loading = true
     root.pending = true
@@ -116,11 +157,36 @@ Panel {
     usageProcess.running = true
   }
 
+  // Die gemerkte Anfrage nachziehen, sobald der Prozess wirklich beendet ist.
+  function drainQueue() {
+    if (!root.queuedRefresh)
+      return
+    root.queuedRefresh = false
+    var fresh = root.queuedFresh
+    root.queuedFresh = false
+    root.refresh(fresh)
+  }
+
   function applyReport(raw) {
-    var parsed = Usage.parse(raw)
+    // Niemand wartet mehr auf diese Antwort: der Watchdog hat den Abruf
+    // abgeschrieben und den Prozess abgeschossen. Was jetzt noch aus der
+    // Pipe fällt, ist ein Fragment und darf seine Meldung nicht ersetzen.
+    if (!root.pending)
+      return
+
     root.pending = false
     root.loading = false
     watchdog.stop()
+
+    // Zwischen Start und Antwort hat der Bar-Host `redact` gesetzt. Dieser
+    // Report zeigt dann die Konten, die verborgen werden sollen — also
+    // verwerfen und mit der aktuellen Einstellung neu holen.
+    if (root.requestRedact !== root.redact) {
+      root.refresh(false)
+      return
+    }
+
+    var parsed = Usage.parse(raw)
     // Ein Fehlerobjekt hat keine Provider — die letzte gute Messung wird
     // dann nicht überschrieben, sondern behalten und der Fehler daneben
     // gezeigt.
@@ -138,9 +204,8 @@ Panel {
 
   // Ein Abruf, der nichts geliefert hat, muss das sagen statt für immer
   // "wird geladen" anzuzeigen. Quickshell feuert kein onExited, wenn das
-  // Programm gar nicht startet (fehlendes oder nicht ausführbares Skript) —
-  // dort fällt nur `running` zurück. Deshalb wird hier der Übergang
-  // ausgewertet und nicht das Prozessende.
+  // Programm gar nicht startet — dort fällt nur `running` zurück. Deshalb
+  // wird der Übergang ausgewertet und nicht das Prozessende.
   function failFetch(message) {
     if (!root.pending)
       return
@@ -149,30 +214,24 @@ Panel {
     watchdog.stop()
     root.fetchError = message
     if (!root.loadedOnce)
-      root.report = { error: message, providers: [], worst: -1, generatedAt: NaN }
+      root.report = Usage.failed(message)
   }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  // Kein Abruf in Component.onCompleted: der Bar-Host injiziert `settings`
-  // erst nach der Instanziierung, ein sofortiger Abruf liefe also mit
-  // Standardwerten — sichtbar an unredigierten Konten trotz aktiver
-  // Redaktion. Ein Tick Verzögerung wartet die Injektion ab.
-  Timer {
-    interval: 250
-    repeat: false
-    running: true
-    onTriggered: root.refresh(false)
-  }
+  // Der erste Abruf läuft sofort. Der Bar-Host injiziert `settings` erst
+  // nach der Instanziierung, aber das braucht keinen geratenen Timer mehr:
+  // schaltet die Injektion `redact` ein, verwirft applyReport() den
+  // unredigierten Report und holt mit der neuen Einstellung nach.
+  Component.onCompleted: root.refresh(false)
 
   // Die Redaktion passiert in omp, nicht hier. Ein Wechsel der Einstellung
-  // muss darum neu abrufen, sonst stehen die Konten bis zum nächsten
-  // Poll-Intervall weiter da.
-  onRedactChanged: if (root.loadedOnce) root.refresh(false)
+  // muss darum neu abrufen — ohne loadedOnce-Guard, denn genau der hätte
+  // die Injektion beim Start ausgesperrt.
+  onRedactChanged: root.refresh(false)
 
   // Beim Öffnen zeigt das Panel echte Zahlen, nicht den Stand von vorhin.
-  // Ein laufender Abruf wird nicht verdoppelt — refresh() prüft `running`.
   onOpenedChanged: {
     if (opened) {
       nowMs = Date.now()
@@ -188,19 +247,33 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.applyReport(text)
     }
-    // Läuft nicht mehr, hat aber nichts geliefert: Skript fehlt, ist nicht
-    // ausführbar oder wurde abgeschossen. usage.sh selbst meldet seine
-    // eigenen Fehler als JSON, die sind hier längst verarbeitet.
-    onRunningChanged: if (!running) root.failFetch("usage.sh lieferte keine Ausgabe — Skript fehlt oder ist nicht ausführbar")
+    // Läuft nicht mehr, hat aber nichts geliefert: Skript fehlt, /bin/bash
+    // fehlt oder der Prozess wurde abgeschossen. usage.sh selbst meldet
+    // seine eigenen Fehler als JSON, die sind hier längst verarbeitet.
+    onRunningChanged: {
+      if (running)
+        return
+      root.failFetch("Abruf lieferte keine Ausgabe — usage.sh oder /bin/bash fehlt")
+      root.drainQueue()
+    }
   }
 
   // Deckt den Fall ab, den kein Signal meldet: ein Abruf, der hängt. Die
-  // Frist ist großzügig, weil `--fresh` alle Provider-APIs neu befragt.
+  // Frist liegt über dem Limit in usage.sh (20 s), damit im Normalfall das
+  // Skript zuerst aufgibt und seinen genaueren Fehler melden kann.
   Timer {
     id: watchdog
-    interval: 45000
+    interval: 25000
     repeat: false
-    onTriggered: root.failFetch("omp hat nach 45 s nicht geantwortet")
+    onTriggered: {
+      // Erst die Meldung, dann der Kill: der Kill läuft über
+      // onRunningChanged, und failFetch() dort würde diese präzise Meldung
+      // sonst durch die generische ersetzen.
+      root.failFetch("omp hat nach 25 s nicht geantwortet")
+      // Ohne den Kill blockiert der Hänger jeden weiteren Abruf für immer,
+      // weil refresh() bei laufendem Prozess nur noch in die Queue schreibt.
+      usageProcess.running = false
+    }
   }
 
   Timer {
@@ -211,12 +284,19 @@ Panel {
     onTriggered: root.refresh(false)
   }
 
-  // Die Countdowns laufen nur, während jemand hinsieht; sonst tickt hier
-  // eine Minute lang nichts, was ohnehin niemand liest.
+  // Die Uhr für die Countdowns tickt, während jemand hinsieht — und im
+  // Fehlerfall, weil dann der Tooltip die Alterung des letzten Abrufs
+  // nennt. `WidgetButton` liest `tooltipText` genau einmal, bei
+  // `onEntered`, und ein Binding auf `nowMs` liefert dort den zuletzt
+  // gesetzten Wert: ohne diesen zweiten Fall zeigte der Tooltip die
+  // Alterung so an, wie sie beim letzten Öffnen des Popups war. Bewusst
+  // über den Zustand statt über ein Hover-Signal — das hinge an der
+  // Reihenfolge von `containsMouse` und `entered()` innerhalb von Qt.
+  // Sonst tickt hier nichts, was ohnehin niemand liest.
   Timer {
     interval: 30000
     repeat: true
-    running: root.opened
+    running: root.opened || root.hasError
     onTriggered: root.nowMs = Date.now()
   }
 
@@ -296,6 +376,8 @@ Panel {
             // nur alt. Das sagt die Fehlerkarte darunter.
             detail: isFinite(root.worst) && root.worst >= 0 ? Math.round(root.worst * 100) + "%" : ""
             meta: {
+              if (root.exhausted)
+                return "Kontingent erschöpft"
               if (isFinite(root.worst) && root.worst >= 0)
                 return root.report.worstProvider + " · " + root.report.worstTitle
               if (root.hasError)
@@ -345,13 +427,25 @@ Panel {
           }
 
           Repeater {
-            model: root.report.providers
+            model: root.providerCount
 
             delegate: Column {
               id: providerBlock
-              required property var modelData
+              required property int index
+
+              readonly property var provider: root.providerAt(providerBlock.index)
+              readonly property int limitCount: provider && provider.limits instanceof Array ? provider.limits.length : 0
+
+              function limitAt(position) {
+                var list = providerBlock.provider ? providerBlock.provider.limits : null
+                return list instanceof Array && position >= 0 && position < list.length ? list[position] : null
+              }
+
               width: content.width
               spacing: Style.space(8)
+              // Während eines Abrufs, der Provider entfernt, kann der Index
+              // kurz ins Leere zeigen.
+              visible: providerBlock.provider !== null
 
               PanelSeparator {
                 foreground: root.foreground
@@ -361,7 +455,7 @@ Panel {
                 width: parent.width
 
                 PanelSectionHeader {
-                  text: providerBlock.modelData.name
+                  text: providerBlock.provider ? providerBlock.provider.name : ""
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                 }
@@ -374,11 +468,20 @@ Panel {
                 PanelSectionHeader {
                   id: providerMeta
                   text: {
+                    var provider = providerBlock.provider
+                    if (!provider)
+                      return ""
                     var parts = []
-                    if (String(providerBlock.modelData.plan || "") !== "")
-                      parts.push(providerBlock.modelData.plan)
-                    if (String(providerBlock.modelData.account || "") !== "")
-                      parts.push(providerBlock.modelData.account)
+                    if (String(provider.plan || "") !== "")
+                      parts.push(provider.plan)
+                    // Leer, solange alle Provider dasselbe Konto melden —
+                    // das steht dann einmal in der Fußzeile.
+                    if (String(provider.account || "") !== "")
+                      parts.push(provider.account)
+                    // Prepaid-Guthaben, mit dem sich ein gesperrtes Fenster
+                    // vorzeitig zurücksetzen lässt.
+                    if (Number(provider.resetCredits) >= 0)
+                      parts.push(Usage.plural(provider.resetCredits, "Reset-Credit", "Reset-Credits"))
                     return parts.join(" · ")
                   }
                   foreground: root.foreground
@@ -392,12 +495,12 @@ Panel {
               }
 
               Repeater {
-                model: providerBlock.modelData.limits
+                model: providerBlock.limitCount
 
                 delegate: LimitRow {
-                  required property var modelData
+                  required property int index
                   width: providerBlock.width
-                  limit: modelData
+                  limit: providerBlock.limitAt(index)
                 }
               }
             }
@@ -405,44 +508,82 @@ Panel {
 
           PanelSeparator {
             foreground: root.foreground
-            visible: root.report.providers.length > 0
+            visible: root.providerCount > 0
           }
 
-          Text {
-            textFormat: Text.PlainText
+          // Zustand und Tastenkürzel in getrennten Zeilen, beide umbrechend.
+          // Als eine Zeile mit `elide` fiel der Hinweis als erstes weg,
+          // sobald ein geteiltes Konto oder ein Zähler dazukam — also genau
+          // die Information, die man hier nachschlägt.
+          Column {
             width: parent.width
-            text: {
-              var parts = []
-              if (root.loading)
-                parts.push("wird aktualisiert")
-              else if (isFinite(root.report.generatedAt))
-                parts.push("Stand " + Usage.agoText(root.report.generatedAt, root.nowMs))
-              if (root.report.disabled > 0)
-                parts.push(root.report.disabled + " Zugang deaktiviert")
-              if (root.report.withoutUsage > 0)
-                parts.push(root.report.withoutUsage + " Konto ohne Daten")
-              parts.push("r neu laden · R Cache leeren")
-              return parts.join("  ·  ")
+            spacing: Style.space(2)
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: text !== ""
+              text: {
+                var parts = []
+                if (root.loading)
+                  parts.push("wird aktualisiert")
+                else if (isFinite(root.report.generatedAt))
+                  parts.push("Stand " + Usage.agoText(root.report.generatedAt, root.nowMs))
+                if (String(root.report.sharedAccount || "") !== "")
+                  parts.push(root.report.sharedAccount)
+                if (root.report.disabled > 0)
+                  parts.push(Usage.plural(root.report.disabled, "Zugang deaktiviert", "Zugänge deaktiviert"))
+                if (root.report.withoutUsage > 0)
+                  parts.push(Usage.plural(root.report.withoutUsage, "Konto ohne Daten", "Konten ohne Daten"))
+                return parts.join("  ·  ")
+              }
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "r neu laden · R Cache leeren"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
           }
         }
       }
     }
   }
 
-  // Eine Kontingentzeile: Titel, Prozent, Meter, Reset-Countdown. Der Meter
-  // zeigt den Verbrauch, füllt also in Richtung Limit.
+  // Eine Kontingentzeile: Titel, Status und Absolutwert, Reset-Countdown,
+  // Prozent, Meter. Der Meter zeigt den Verbrauch, füllt also in Richtung
+  // Limit.
   component LimitRow: Column {
     id: limitRow
     property var limit: null
 
     readonly property real fraction: limit ? Number(limit.fraction) : -1
-    readonly property bool alarming: isFinite(fraction) && fraction >= root.alarmAt
+    // Erschöpft heißt erschöpft, unabhängig vom Füllstand: `fraction` ist
+    // auf 1 begrenzt und ein überzogenes Kontingent sähe sonst aus wie ein
+    // gerade eben volles.
+    readonly property bool exhausted: limit ? limit.exhausted === true : false
+    readonly property bool alarming: exhausted || (isFinite(fraction) && fraction >= root.alarmAt)
     readonly property string resetText: limit ? Usage.untilText(limit.resetsAt, root.nowMs) : ""
+    // Status zuerst, dann der Absolutwert — letzterer nur, wo die Einheit
+    // keine Prozent sind und der Prozentwert die Zahl verschweigt.
+    readonly property string detailText: {
+      if (!limitRow.limit)
+        return ""
+      var parts = []
+      if (String(limitRow.limit.statusLabel || "") !== "")
+        parts.push(limitRow.limit.statusLabel)
+      if (String(limitRow.limit.amountText || "") !== "")
+        parts.push(limitRow.limit.amountText)
+      return parts.join(" · ")
+    }
 
     spacing: Style.space(5)
 
@@ -457,24 +598,37 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight
-        // Prozent und Reset behalten ihren Platz; ein langer Fenstername
-        // weicht zuerst.
-        width: Math.min(implicitWidth, Math.max(0, parent.width - limitReset.implicitWidth - limitPercent.implicitWidth - Style.space(12)))
+        // Prozent, Reset und Detail behalten ihren Platz; ein langer
+        // Fenstername weicht zuerst.
+        width: Math.min(implicitWidth, Math.max(0, parent.width - limitDetail.implicitWidth - limitReset.implicitWidth - limitPercent.implicitWidth - Style.space(12)))
       }
 
       Item {
-        width: Math.max(0, parent.width - limitTitle.width - limitReset.implicitWidth - limitPercent.implicitWidth)
+        width: Math.max(0, parent.width - limitTitle.width - limitDetail.implicitWidth - limitReset.implicitWidth - limitPercent.implicitWidth)
         height: 1
+      }
+
+      Text {
+        id: limitDetail
+        textFormat: Text.PlainText
+        text: limitRow.detailText
+        visible: text !== ""
+        color: limitRow.exhausted ? root.urgent : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        // Kein Platz reservieren, wenn nichts zu sagen ist.
+        rightPadding: text !== "" ? Style.space(8) : 0
+        anchors.baseline: limitTitle.baseline
       }
 
       Text {
         id: limitReset
         textFormat: Text.PlainText
-        text: limitRow.resetText !== "" ? limitRow.resetText : ""
+        text: limitRow.resetText
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
-        rightPadding: Style.space(8)
+        rightPadding: text !== "" ? Style.space(8) : 0
         anchors.baseline: limitTitle.baseline
       }
 
