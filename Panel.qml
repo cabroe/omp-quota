@@ -220,6 +220,19 @@ Panel {
     usageProcess.running = true
   }
 
+  // Alle drei Abrufe (Live + Geschichte + Statistik) — nur für explizite
+  // Nutzerhandlungen (r / R / Mittelklick / Rechtsklick / Enter). Die Guards
+  // in refreshHistory/refreshStats machen sie beim Schließen zum No-Op, ohne
+  // dass hier ein `opened`-Check nötig wäre. Der Poll und onRedactChanged
+  // nutzen weiterhin nur refresh(), um stündliche DB-Lese nicht zu häufen.
+  function refreshAll(fresh) {
+    root.refresh(fresh)
+    if (root.opened) {
+      refreshHistory()
+      refreshStats()
+    }
+  }
+
   // Die gemerkte Anfrage nachziehen, sobald der Prozess wirklich beendet ist.
   function drainQueue() {
     if (!root.queuedRefresh)
@@ -254,6 +267,10 @@ Panel {
       var fresh = root.queuedFresh
       root.queuedRefresh = false
       root.queuedFresh = false
+      // Nur den Live-Abruf neu starten: dieser Pfad entsteht aus einem
+      // Poll, der vor der Redaktionsumstellung gestartet wurde, und ein
+      // Geschichte- oder Statistik-Refresh wäre hier unnötiger DB-Lese-
+      // Aufwand. refreshAll ist für explizite Nutzerhandlungen reserviert.
       root.refresh(fresh)
       return
     }
@@ -385,10 +402,17 @@ Panel {
     // Läuft nicht mehr, hat aber nichts geliefert: Skript fehlt, /bin/bash
     // fehlt oder der Prozess wurde abgeschossen. usage.sh selbst meldet
     // seine eigenen Fehler als JSON, die sind hier längst verarbeitet.
+    // Quickshell garantiert nicht, dass onRunningChanged vor onStreamFinished
+    // oder danach feuert — beides ist möglich. Mit Qt.callLater wird
+    // failFetch asynchron aufgerufen, damit ein bereits laufendes
+    // onStreamFinished (das applyReport mit dem gültigen Report aufruft)
+    // zuerst drankommt. applyReport setzt pending=false; failFetch ist
+    // dann ein No-Op. Bleibt pending=true, lief kein Stream-Finished und
+    // der Fehler wird gemeldet.
     onRunningChanged: {
       if (running)
         return
-      root.failFetch("Abruf lieferte keine Ausgabe — usage.sh oder /bin/bash fehlt")
+      Qt.callLater(root.failFetch, "Abruf lieferte keine Ausgabe — usage.sh oder /bin/bash fehlt")
       root.drainQueue()
     }
   }
@@ -521,9 +545,9 @@ Panel {
 
     onPressed: function (code) {
       if (code === Qt.RightButton)
-        root.refresh(true)
+        root.refreshAll(true)
       else if (code === Qt.MiddleButton)
-        root.refresh(false)
+        root.refreshAll(false)
       else if (root.opened)
         root.close()
       else
@@ -553,12 +577,12 @@ Panel {
         if (dy !== 0)
           flick.scrollBy(dy)
       }
-      onActivateRequested: root.refresh(false)
+      onActivateRequested: root.refreshAll(false)
       onTextKey: function (t) {
         if (t === "r")
-          root.refresh(false)
+          root.refreshAll(false)
         else if (t === "R" || t === "f")
-          root.refresh(true)
+          root.refreshAll(true)
         else if (t === "v")
           root.activeView = (root.activeView + 1) % 3
       }
@@ -765,7 +789,7 @@ Panel {
               width: parent.width
               visible: statsView.stats !== null && isFinite(statsView.stats.cost)
               textFormat: Text.PlainText
-              text: "Kosten heute: " + Usage.formatMoney(statsView.stats ? statsView.stats.cost : NaN)
+              text: "Kosten 24h: " + Usage.formatMoney(statsView.stats ? statsView.stats.cost : NaN)
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall

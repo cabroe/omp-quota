@@ -596,7 +596,8 @@ function barTooltip(report, errorText, now) {
   if (error.length === 0)
     return text;
   // Mit Fehler daneben: die Zahl gilt weiter, sie ist nur nicht mehr neu.
-  return text + " (Stand " + agoText(data.generatedAt, now) + ", Abruf fehlgeschlagen)";
+  // Die konkrete Fehlermeldung zeigen, nicht nur "fehlgeschlagen".
+  return text + " (Stand " + agoText(data.generatedAt, now) + ", " + error + ")";
 }
 
 // ---------------------------------------------------------- Verlaufsdaten
@@ -775,7 +776,11 @@ function topConsumers(providers, series, count) {
   out.sort(function (a, b) {
     if (b.peak !== a.peak)
       return b.peak - a.peak;
-    return b.average - a.average;
+    if (b.average !== a.average)
+      return b.average - a.average;
+    var na = String(a.provider ? a.provider.name || "" : "");
+    var nb = String(b.provider ? b.provider.name || "" : "");
+    return na.localeCompare(nb, "en");
   });
   return out.length > take ? out.slice(0, take) : out;
 }
@@ -856,6 +861,12 @@ function formatMoney(value) {
   var n = num(value);
   if (!isFinite(n))
     return "";
-  var text = Math.abs(n) >= 1000 ? Math.round(n).toString() : n.toFixed(2);
-  return "$" + text.replace(".", ",");
+  // Erst auf 2 Dezimalstellen runden: 999.999 -> 1000.00 (IEEE-754-Effekt
+  // bei der Gleitkomma-Darstellung von 999.999). Dann Schwelle auf dem
+  // gerundeten Wert: 1000.00 >= 1000 -> "$1000"; 999.99 -> 999.99 < 1000
+  // -> "$999,99". Vorher prüfte die Schwelle auf dem Ungerundeten, und
+  // toFixed(2) rundete 999.999 zu "1000.00" -> "$1000,00" (falsch).
+  var rounded = Math.round(n * 100) / 100;
+  var text = Math.abs(rounded) >= 1000 ? String(Math.round(rounded)) : rounded.toFixed(2);
+  return (rounded < 0 ? "-$" : "$") + text.replace("-", "").replace(".", ",");
 }

@@ -838,11 +838,11 @@ describe("barTooltip", () => {
       .toContain("(Kontingent erschöpft)");
   });
 
-  test("mit Fehler bleibt die Zahl, bekommt aber ihr Alter", () => {
-    const text = usage.barTooltip(report, "omp weg", now);
+  test("mit Fehler bleibt die Zahl, bekommt aber ihr Alter und die konkrete Meldung", () => {
+    const text = usage.barTooltip(report, "Timeout nach 20s", now);
     expect(text).toContain("omp: 60%");
     expect(text).toContain("Stand vor 3m");
-    expect(text).toContain("Abruf fehlgeschlagen");
+    expect(text).toContain("Timeout nach 20s");
   });
 
   test("ohne Messung nur der Fehler bzw. der Titel", () => {
@@ -1070,6 +1070,27 @@ describe("topConsumers", () => {
     expect(usage.topConsumers(PROVIDERS, { a5: [{ t: 0, f: 0.5 }, { t: 1, f: 0.5 }] }, NaN)).toEqual([]);
     expect(usage.topConsumers(PROVIDERS, { a5: [{ t: 0, f: 0.5 }, { t: 1, f: 0.5 }] }, 0)).toEqual([]);
   });
+
+  test("regression: bei peak+avg-Gleichstand entscheidet der Providername", () => {
+    // Vorher: Reihenfolge hing von der parse-Sortierung ab. Bei wechselnder
+    // parse-Eingabereihenfolge (Providerliste kommt sortiert aus parse())
+    // rutschten gleichwertige Provider in der Top-Verbraucher-Liste hin
+    // und her. Jetzt: alphabetisch nach Providername.
+    const series = {
+      a5: [{ t: 0, f: 0.5 }, { t: 3600, f: 0.5 }],
+      b5: [{ t: 0, f: 0.5 }, { t: 3600, f: 0.5 }],
+      c5: [{ t: 0, f: 0.5 }, { t: 3600, f: 0.5 }],
+    };
+    const names = (list) =>
+      usage.topConsumers(list, series, 3).map((e) => e.provider.name);
+    // Lieferreihenfolge gewechselt: Ergebnis bleibt alphabetisch stabil.
+    expect(names([PROVIDERS[0], PROVIDERS[1], PROVIDERS[2]]))
+      .toEqual(["A", "B", "C"]);
+    expect(names([PROVIDERS[2], PROVIDERS[1], PROVIDERS[0]]))
+      .toEqual(["A", "B", "C"]);
+    expect(names([PROVIDERS[1], PROVIDERS[0], PROVIDERS[2]]))
+      .toEqual(["A", "B", "C"]);
+  });
 });
 
 // Echte omp-stats-Form (gekürzt auf die Felder, die parseStats liest).
@@ -1144,8 +1165,44 @@ describe("formatMoney", () => {
     expect(usage.formatMoney(1234.56)).toBe("$1235");
   });
 
+  test("regression: IEEE-754-Rundung an der 1000-Schwelle", () => {
+    // Vorher: formatMoney(999.999) prüfte die Schwelle auf dem ungerundeten
+    // Wert (< 1000) und gab dann n.toFixed(2) aus — JS rundet 999.999
+    // intern zu 1000.00 ("$1000,00"), eine 4+2-Darstellung für einen
+    // Wert unter 1000. Jetzt: erst auf 2 Dezimalstellen runden, dann
+    // Schwelle auf dem gerundeten Wert prüfen.
+    expect(usage.formatMoney(999.999)).toBe("$1000");
+    expect(usage.formatMoney(999.995)).toBe("$1000");
+    // Knapp darunter bleibt im Cent-Bereich.
+    expect(usage.formatMoney(999.99)).toBe("$999,99");
+    expect(usage.formatMoney(999.994)).toBe("$999,99");
+    // Die alte Verhaltensgrenze wandert nicht.
+    expect(usage.formatMoney(1000)).toBe("$1000");
+    expect(usage.formatMoney(999)).toBe("$999,00");
+  });
+
   test("unbrauchbare Eingabe: leer", () => {
     expect(usage.formatMoney(null)).toBe("");
     expect(usage.formatMoney("x")).toBe("");
+  });
+
+  test("negative Beträge korrekt formatiert", () => {
+    expect(usage.formatMoney(-999.999)).toBe("-$1000");
+    expect(usage.formatMoney(-999.99)).toBe("-$999,99");
+    expect(usage.formatMoney(-56.46)).toBe("-$56,46");
+    expect(usage.formatMoney(-1234.56)).toBe("-$1235");
+  });
+
+  test("regression: negatives IEEE-754 an der Schwelle — -999.999 ergibt -$1000, nicht -$1000,00", () => {
+    // gerundet: -999.999 -> -1000.00; Schwelle >= 1000 -> String(Math.round(-1000)) = "-1000"
+    expect(usage.formatMoney(-999.999)).toBe("-$1000");
+  });
+
+  test("-0.00 zeigt nicht $-0,00", () => {
+    // Math.round(-0.001*100) = Math.round(-0.1) = 0 (JS rundet -0.1 zu 0)
+    // Also ergibt -0.001 -> $0,00 (korrekt, weil der Betrag 0 ist)
+    expect(usage.formatMoney(-0.001)).toBe("$0,00");
+    // -0.005 -> Math.round(-0.5) = 0 -> $0,00 (nach -0.5 wird zu 0 gerundet)
+    expect(usage.formatMoney(-0.005)).toBe("$0,00");
   });
 });

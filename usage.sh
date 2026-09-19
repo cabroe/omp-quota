@@ -138,8 +138,8 @@ if [[ $mode == history ]]; then
 elif [[ $mode == stats ]]; then
   # Statistikmodus: omps Session-Statistik der letzten 24 h (omps eigener
   # Default), inkl. der Präambel-Zeile "Synced ...", die die Sed-Pipeline
-  # unten ohnehin abschneidet. --redact hat hier nichts zu verbergen und
-  # --fresh keinen Cache, den es lohnte zu leeren.
+  # unten ohnehin abschneidet. --fresh hat hier keinen Cache, den es
+  # lohnte zu leeren.
   args=(stats --json)
 else
   # Ein erzwungener Refresh verwirft zuerst omps gecachte Reports; die
@@ -150,7 +150,19 @@ else
   fi
   args=(usage --json)
 fi
-((redact)) && args+=(--redact)
+# `omp stats` kennt kein --redact: es nennt Modelle, keine Konten. Das Flag
+# blind anzuhängen brach den Aufruf mit "Unknown option '--redact'" ab, und
+# die Analyse-Ansicht blieb bei aktiver Redaktion leer.
+if ((redact)) && [[ $mode != stats ]]; then
+  args+=(--redact)
+fi
+
+# Das Kommando, das wirklich lief — Grundlage jeder Fehlermeldung unten.
+# Vorher stand dort dreimal hartverdrahtet "omp usage --json", also
+# behauptete ein gescheiterter Verlauf- oder Statistikabruf, `omp usage`
+# sei gescheitert: eine Fehldiagnose genau in dem Moment, in dem die
+# Meldung die einzige Spur ist.
+label="omp ${args[*]}"
 
 # stdout bekommt denselben OOM-Schutz wie stderr: Ein ausartender oder
 # kompromittierter omp kann Gigabytes schreiben; head deckelt die Variable
@@ -169,7 +181,7 @@ status=$?
 # abreißen lassen — das würde die JSON-Garantie selbst brechen. Die
 # 400-Zeichen-Kürzung in json_string() greift dafür zu spät.
 detail=""
-[[ -n $errfile ]] && detail=$(head -c 2000 "$errfile" 2>/dev/null)
+[[ -n "$errfile" && -f "$errfile" ]] && detail=$(head -c 2000 "$errfile" 2>/dev/null)
 
 # 124 = TERM-Frist, 137 = KILL-Phase von -k (ein TERM-ignorierendes omp
 # wird nach 2 s Gnade erschossen). Beides ist derselbe Fall: omp hat die
@@ -177,18 +189,30 @@ detail=""
 # Retry-Loops und API-Fehler erklären genau, warum nichts kam.
 if ((status == 124 || status == 137)); then
   if [[ -n $detail ]]; then
-    emit_error "omp usage --json hat nach ${OMP_TIMEOUT} s nicht geantwortet: $detail"
+    emit_error "$label hat nach ${OMP_TIMEOUT} s nicht geantwortet: $detail"
   else
-    emit_error "omp usage --json hat nach ${OMP_TIMEOUT} s nicht geantwortet"
+    emit_error "$label hat nach ${OMP_TIMEOUT} s nicht geantwortet"
   fi
   exit 1
 fi
 
+# 141 = SIGPIPE: head hat seine 5 MB gelesen und die Pipe geschlossen;
+# omp versucht weiterzuschreiben und bekommt SIGPIPE. Das ist kein Fehler,
+# sondern eine bewusste Begrenzung — das Teilstück ist gültiges JSON und wird
+# weiter unten verarbeitet. Nur den Fall behandeln, in dem stdout leer blieb.
+if ((status == 141)); then
+  if [[ -z $report ]]; then
+    emit_error "$label Ausgabe ueberschreitet 5 MB (abgeschnitten)"
+    exit 1
+  fi
+  # report ist nicht leer — es ist das truncated JSON, also weitermachen.
+fi
+
 if ((status != 0)) || [[ -z $report ]]; then
   if [[ -n $detail ]]; then
-    emit_error "omp usage --json fehlgeschlagen (exit $status): $detail"
+    emit_error "$label fehlgeschlagen (exit $status): $detail"
   else
-    emit_error "omp usage --json fehlgeschlagen (exit $status), keine Fehlerausgabe"
+    emit_error "$label fehlgeschlagen (exit $status), keine Fehlerausgabe"
   fi
   exit 1
 fi
@@ -213,7 +237,7 @@ payload=$(printf '%s' "$report" | sed -n -E '/^[[:space:]]*\{(["}]|$)/,$p')
 # oben schneidet sie auf nichts zusammen. Dieses leere Ergebnis auszugeben
 # bräche das einzige Versprechen dieses Skripts: stdout ist ein JSON-Objekt.
 if [[ -z ${payload//[[:space:]]/} ]]; then
-  emit_error "omp usage --json lieferte kein JSON-Objekt: $report"
+  emit_error "$label lieferte kein JSON-Objekt: $report"
   exit 1
 fi
 
