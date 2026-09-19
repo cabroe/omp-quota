@@ -872,3 +872,163 @@ function formatMoney(value) {
   var text = Math.abs(rounded) >= 1000 ? String(Math.round(rounded)) : rounded.toFixed(2);
   return (rounded < 0 ? "-$" : "$") + text.replace("-", "").replace(".", ",");
 }
+
+// ---------------------------------------------------------------- Tipps
+//
+// Abgeleitete Handlungshinweise für die Kontingent-Ansicht: bis zu drei
+// Zeilen aus den drei ohnehin geholten Quellen (Live-Report, Verlauf,
+// Statistik) — keine eigene Anfrage, kein Providerwissen, Namen und Titel
+// kommen aus dem normalisierten Report. Dringlichkeit zuerst, und ein
+// Hinweis, der gerade nicht zutrifft, erscheint gar nicht statt leer.
+
+// Obergrenze: ein Tipps-Block, der die Kontingente verdrängt, ist selbst
+// kein Hinweis mehr.
+var TIP_LIMIT = 3;
+
+// Warten auf einen Reset lohnt sich erst, wenn das Fenster halbvoll ist —
+// bei 10 % Verbrauch gewinnt eine Viertelstunde Pause nichts.
+var RESET_RIDE_FRACTION = 0.5;
+
+// … und nur, wenn der Reset nah genug ist, um ihn bewusst abzuwarten.
+var RESET_RIDE_WINDOW_MS = 30 * 60 * 1000;
+
+// "Frei" ist ein Provider, dessen schlimmstes Fenster höchstens zu einem
+// Viertel voll ist — darüber ist er keine Ausweichfläche mehr, nur noch
+// ein weniger voller.
+var SPARE_FRACTION = 0.25;
+
+// Kostentreiber ist ein Modell, das die Hälfte der Ausgaben der letzten
+// 24 h trägt. Der Hinweis lebt vom Kontrast: kleiner Anteil der Anfragen,
+// großer Anteil der Kosten.
+var COST_DRIVER_SHARE = 0.5;
+
+// Die Hinweise, Dringlichkeit zuerst:
+//
+//  1. Engpass — ein Fenster liegt über der Alarmschwelle (dieselbe wie die
+//     Farbrampe). Als Einziges alarmfarben.
+//  2. Reset vor der Tür — ein halbvolles Fenster resettet in ≤ 30 Minuten:
+//     Eine kurze Pause ersetzt das Abwarten des vollen Fensters.
+//  3. Spitzen-Vorlauf — ein Fenster, das heute ruhig ist, stand innerhalb
+//     der 7 Tage schon über der Schwelle. Die Historie sagt, wo es regelmäßig
+//     eng wird, der Live-Stand allein nicht.
+//  4. Kostentreiber — ein Modell mit der Hälfte der Kosten (Statistik).
+//  5. Freie Kapazität — der leereste Provider, wenn es mindestens zwei mit
+//     Kontingenten gibt: Wohin die Last ausweichen kann.
+function tips(report, series, stats, alarmAt, nowMs) {
+  var data = report || {};
+  var providers = data.providers instanceof Array ? data.providers : [];
+  var map = series && typeof series === "object" && !(series instanceof Array) ? series : {};
+  var threshold = num(alarmAt);
+  if (!isFinite(threshold) || threshold <= 0)
+    threshold = 0.9;
+  var now = num(nowMs);
+  if (!isFinite(now))
+    now = Date.now();
+
+  var tight = null;
+  var ride = null;
+  var watch = null;
+  var spare = null;
+  var spareCount = 0;
+
+  for (var p = 0; p < providers.length; p++) {
+    var provider = providers[p] || {};
+    var limits = provider.limits instanceof Array ? provider.limits : [];
+    var worst = -1;
+    for (var l = 0; l < limits.length; l++) {
+      var limit = limits[l];
+      if (!limit)
+        continue;
+      var fraction = num(limit.fraction);
+      // Das schlimmste Fenster des Providers zählt unbegrenzte (-1) nicht —
+      // ein unbegrenztes Fenster macht keinen Provider "frei".
+      if (isFinite(fraction) && fraction > worst)
+        worst = fraction;
+      if (limit.unlimited === true)
+        continue;
+      var label = String(provider.name || "") + " · " + String(limit.title || "");
+
+      if (isFinite(fraction) && fraction >= threshold
+        && (tight === null || fraction > tight.fraction))
+        tight = { label: label, fraction: fraction };
+
+      var resetsAt = num(limit.resetsAt);
+      var wait = resetsAt - now;
+      if (isFinite(fraction) && fraction >= RESET_RIDE_FRACTION
+        && limit.exhausted !== true && isFinite(resetsAt)
+        && wait > 0 && wait <= RESET_RIDE_WINDOW_MS
+        && (ride === null || wait < ride.wait))
+        ride = { label: label, resetsAt: resetsAt, wait: wait };
+
+      var points = map[String(limit.id || "")];
+      var summary = historySummary(points instanceof Array ? points : []);
+      if (summary.count >= 2 && isFinite(fraction) && fraction < threshold
+        && summary.peak >= threshold
+        && (watch === null || summary.peak > watch.peak))
+        watch = { label: label, peak: summary.peak };
+    }
+    if (worst >= 0) {
+      spareCount++;
+      if (spare === null || worst < spare.fraction)
+        spare = { name: String(provider.name || ""), fraction: worst };
+    }
+  }
+
+  var out = [];
+  if (tight !== null)
+    out.push({
+      text: "Engpass: " + tight.label + " bei " + Math.round(tight.fraction * 100) + "%",
+      alarm: true
+    });
+  if (ride !== null)
+    out.push({
+      text: "Warten lohnt sich: " + ride.label + " resettet in "
+        + untilText(ride.resetsAt, now),
+      alarm: false
+    });
+  if (watch !== null)
+    out.push({
+      text: watch.label + ": 7-Tage-Spitze " + Math.round(watch.peak * 100) + "%",
+      alarm: false
+    });
+
+  var driver = costDriver(stats);
+  if (driver !== null)
+    out.push(driver);
+
+  if (spare !== null && spareCount >= 2 && spare.fraction <= SPARE_FRACTION)
+    out.push({
+      text: "Freie Kapazität: " + spare.name + " (" + Math.round(spare.fraction * 100) + "%)",
+      alarm: false
+    });
+
+  return out.length > TIP_LIMIT ? out.slice(0, TIP_LIMIT) : out;
+}
+
+// Das teuerste Modell, sofern es die COST_DRIVER_SHARE-Schwelle der
+// Gesamtkosten erreicht. parseStats() liefert die Modelle absteigend nach
+// Kosten — hinter dem ersten Modell unter der Schwelle kann keins mehr
+// folgen, also reicht der Abbruch dort.
+function costDriver(stats) {
+  if (stats === null || typeof stats !== "object")
+    return null;
+  var totalCost = num(stats.cost);
+  var totalRequests = num(stats.requests);
+  if (!isFinite(totalCost) || totalCost <= 0)
+    return null;
+
+  var models = stats.models instanceof Array ? stats.models : [];
+  for (var i = 0; i < models.length; i++) {
+    var model = models[i] || {};
+    var cost = num(model.cost);
+    if (!isFinite(cost) || cost <= 0 || cost / totalCost < COST_DRIVER_SHARE)
+      break;
+    var requests = num(model.requests);
+    var text = "Kostentreiber: " + String(model.name || "")
+      + " — " + Math.round((cost / totalCost) * 100) + "% der Kosten";
+    if (isFinite(requests) && isFinite(totalRequests) && totalRequests > 0)
+      text += ", " + Math.round((requests / totalRequests) * 100) + "% der Anfragen";
+    return { text: text, alarm: false };
+  }
+  return null;
+}

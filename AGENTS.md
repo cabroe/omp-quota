@@ -54,7 +54,11 @@ refreshStats() (popup open only) ──► Usage.js: parseStats()
    sparkline, plus `Usage.historySummary()` — average, peak, snapshot
    count, last snapshot age) and "Analyse" (stats view:
    requests/errors/tokens/cache, today's cost and per-model rows sorted
-   by cost). Tab order: Kontingente, Verbrauch, Analyse.
+   by cost). Tab order: Kontingente, Verbrauch, Analyse. The Kontingente
+   view opens with up to three derived hints (`Usage.tips()`: bottleneck,
+   imminent reset, 7-day peak, cost driver, spare capacity — priority
+   order, only the bottleneck in urgent colour; the block disappears
+   entirely when nothing applies).
    `activeView` (0/1/2) survives close; both fetches run on
    open so switching is instant.
 6. **Fetch lifecycle** (`Panel.qml`): a request arriving while a fetch runs
@@ -177,8 +181,9 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
 - Pure logic does not live in `Panel.qml`. `bun` cannot load QML and the QML
   runtime has no assertions, so an inline expression there is unreachable
   for every test. `Usage.js` therefore owns the settings clamps
-  (`refreshInterval`, `alarmFraction`), the ramp curve (`rampFactor`), and
-  the bar strings (`barText`, `barTooltip`); `Panel.qml` only binds. What
+  (`refreshInterval`, `alarmFraction`), the ramp curve (`rampFactor`), the
+  bar strings (`barText`, `barTooltip`), and the derived tips (`tips`);
+  `Panel.qml` only binds. What
   stays in QML is what needs QML: `mix()` (needs `Qt.rgba`), colour/theme
   properties, and the fetch lifecycle.
 - Theme switches take effect live, without `omarchy restart shell`: `Color`'s

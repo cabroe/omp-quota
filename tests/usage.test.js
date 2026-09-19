@@ -35,6 +35,7 @@ const usage = load("../Usage.js", [
   "topConsumers",
   "parseStats",
   "formatMoney",
+  "tips",
 ]);
 
 const providers = load("../Providers.js", ["resolve"]);
@@ -1205,5 +1206,184 @@ describe("formatMoney", () => {
     expect(usage.formatMoney(-0.001)).toBe("$0,00");
     // -0.005 -> Math.round(-0.5) = 0 -> $0,00 (nach -0.5 wird zu 0 gerundet)
     expect(usage.formatMoney(-0.005)).toBe("$0,00");
+  });
+});
+
+describe("tips", () => {
+  // Fester Zeitpunkt, damit die Reset-Fenster deterministisch sind.
+  const NOW = 1000 * 1000;
+
+  function reportOfLimits(...limits) {
+    return usage.parse(reportOf(rawProvider({ limits })));
+  }
+
+  test("Engpass: Fenster über der Schwelle, als Einziges alarmfarben", () => {
+    const report = reportOfLimits(rawLimit({ amount: { usedFraction: 0.95 } }));
+    const out = usage.tips(report, {}, null, 0.9, NOW);
+    expect(out.length).toBe(1);
+    expect(out[0].alarm).toBe(true);
+    expect(out[0].text).toContain("Engpass");
+    expect(out[0].text).toContain("Z.ai");
+    expect(out[0].text).toContain("95%");
+  });
+
+  test("Reset vor der Tür: halbvolles Fenster mit Reset in ≤ 30 Minuten", () => {
+    const report = reportOfLimits(rawLimit({
+      amount: { usedFraction: 0.5 },
+      window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 14 * MIN },
+    }));
+    const out = usage.tips(report, {}, null, 0.9, NOW);
+    expect(out.length).toBe(1);
+    expect(out[0].alarm).toBe(false);
+    expect(out[0].text).toContain("resettet in 14m");
+  });
+
+  test("Reset-Tipp nur bei halbvollem, unerschöpftem, nahem Reset", () => {
+    const cases = [
+      // zu leer — Warten bringt nichts
+      rawLimit({ amount: { usedFraction: 0.3 }, window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 10 * MIN } }),
+      // zu fern — niemand wartet 45 Minuten bewusst
+      rawLimit({ amount: { usedFraction: 0.6 }, window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 45 * MIN } }),
+      // erschöpft — der Reset-Countdown steht schon in der Zeile selbst
+      rawLimit({ amount: { usedFraction: 0.6 }, status: "exhausted", window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 10 * MIN } }),
+    ];
+    for (const limit of cases)
+      expect(usage.tips(reportOfLimits(limit), {}, null, 0.9, NOW)).toEqual([]);
+  });
+
+  test("Spitzen-Vorlauf: ruhiges Fenster mit 7-Tage-Spitze über der Schwelle", () => {
+    const report = reportOfLimits(rawLimit({ amount: { usedFraction: 0.2 } }));
+    const series = { l1: [{ t: 0, f: 0.92 }, { t: HOUR, f: 0.1 }] };
+    const out = usage.tips(report, series, null, 0.9, NOW);
+    expect(out.length).toBe(1);
+    expect(out[0].alarm).toBe(false);
+    expect(out[0].text).toContain("7-Tage-Spitze 92%");
+  });
+
+  test("über der Schwelle zählt der Engpass, nicht die Spitze", () => {
+    const report = reportOfLimits(rawLimit({ amount: { usedFraction: 0.95 } }));
+    const series = { l1: [{ t: 0, f: 0.95 }, { t: HOUR, f: 0.9 }] };
+    const out = usage.tips(report, series, null, 0.9, NOW);
+    expect(out.filter((t) => t.text.indexOf("7-Tage-Spitze") >= 0)).toEqual([]);
+    expect(out[0].text).toContain("Engpass");
+  });
+
+  test("Kostentreiber: halbe Kosten aus einem Modell, mit Anfrage-Anteil", () => {
+    const { stats } = usage.parseStats(STATS_RAW);
+    // opus: 94.28 von 102.8004 = 92 % der Kosten, 675 von 2297 = 29 % der Anfragen.
+    const report = reportOfLimits(rawLimit({
+      amount: { usedFraction: 0.1 },
+      window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 5 * HOUR },
+    }));
+    const out = usage.tips(report, {}, stats, 0.9, NOW);
+    expect(out.length).toBe(1);
+    expect(out[0].text).toBe("Kostentreiber: claude-opus-5 — 92% der Kosten, 29% der Anfragen");
+  });
+
+  test("kein Kostentreiber unterhalb der halben Kosten und ohne Statistik", () => {
+    const stats = {
+      cost: 100,
+      requests: 100,
+      models: [{ name: "a", cost: 40, requests: 50 }, { name: "b", cost: 35, requests: 30 }, { name: "c", cost: 25, requests: 20 }],
+    };
+    const report = reportOfLimits(rawLimit({
+      amount: { usedFraction: 0.1 },
+      window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 5 * HOUR },
+    }));
+    expect(usage.tips(report, {}, stats, 0.9, NOW)).toEqual([]);
+    expect(usage.tips(report, {}, null, 0.9, NOW)).toEqual([]);
+  });
+
+  test("Freie Kapazität: der leereste Provider, ab dem zweiten mit Kontingent", () => {
+    const report = usage.parse(reportOf(
+      rawProvider({ limits: [rawLimit({
+        amount: { usedFraction: 0.9 },
+        window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 5 * HOUR },
+      })] }),
+      {
+        provider: "minimax-code",
+        metadata: {},
+        limits: [{
+          id: "m5",
+          label: "5 Hour",
+          amount: { usedFraction: 0.06 },
+          window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR, resetsAt: NOW + 3 * HOUR },
+        }],
+      },
+    ));
+    const out = usage.tips(report, {}, null, 0.9, NOW);
+    expect(out.length).toBe(2);
+    expect(out[0].alarm).toBe(true);
+    expect(out[1].text).toBe("Freie Kapazität: MiniMax Code (6%)");
+  });
+
+  test("keine freie Kapazität über dem Viertel oder mit nur einem Provider", () => {
+    const two = usage.parse(reportOf(
+      rawProvider({ limits: [rawLimit({
+        amount: { usedFraction: 0.3 },
+        window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 5 * HOUR },
+      })] }),
+      {
+        provider: "minimax-code",
+        metadata: {},
+        limits: [{
+          id: "m5",
+          label: "5 Hour",
+          amount: { usedFraction: 0.4 },
+          window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR, resetsAt: NOW + 3 * HOUR },
+        }],
+      },
+    ));
+    expect(usage.tips(two, {}, null, 0.9, NOW)).toEqual([]);
+  });
+
+  test("höchstens drei Hinweise, Dringlichkeit zuerst", () => {
+    // Fünf Kandidaten: Engpass, Reset vor der Tür, Spitzen-Vorlauf (zweites
+    // Fenster), Kostentreiber, freie Kapazität — gedeckelt auf die ersten
+    // drei in Prioritätsreihenfolge.
+    const report = usage.parse(reportOf(
+      rawProvider({ limits: [
+        rawLimit({ id: "l1", amount: { usedFraction: 0.95 }, window: { label: "5 Hours", durationMs: 5 * HOUR, resetsAt: NOW + 10 * MIN } }),
+        rawLimit({ id: "l2", label: "7 Day", amount: { usedFraction: 0.2 }, window: { label: "7 Day", durationMs: 7 * DAY, resetsAt: NOW + 6 * DAY } }),
+      ] }),
+      {
+        provider: "minimax-code",
+        metadata: {},
+        limits: [{
+          id: "m5",
+          label: "5 Hour",
+          amount: { usedFraction: 0.06 },
+          window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR, resetsAt: NOW + 3 * HOUR },
+        }],
+      },
+    ));
+    const series = { l2: [{ t: 0, f: 0.95 }, { t: HOUR, f: 0.4 }] };
+    const { stats } = usage.parseStats(STATS_RAW);
+    const out = usage.tips(report, series, stats, 0.9, NOW);
+    expect(out.length).toBe(3);
+    expect(out[0].text).toContain("Engpass");
+    expect(out[1].text).toContain("resettet in 10m");
+    expect(out[2].text).toContain("7-Tage-Spitze 95%");
+  });
+
+  test("unbegrenzte Fenster erzeugen keine Hinweise", () => {
+    // MiniMax' Phantomfenster 7d meldet 0 % — unbegrenzt, also weder Engpass
+    // noch Reset noch "freie Kapazität".
+    const report = usage.parse(reportOf({
+      provider: "minimax-code",
+      metadata: {},
+      limits: [{
+        id: "m7",
+        label: "7 Day",
+        amount: { usedFraction: 0 },
+        window: { id: "7d", label: "7 Day", durationMs: 7 * DAY, resetsAt: NOW + 6 * DAY },
+      }],
+    }));
+    expect(usage.tips(report, {}, null, 0.9, NOW)).toEqual([]);
+  });
+
+  test("Fehlerbericht und unbrauchbare Eingaben: keine Hinweise", () => {
+    expect(usage.tips(usage.parse('{"error":"weg"}'), {}, null, 0.9, NOW)).toEqual([]);
+    expect(usage.tips(undefined, undefined, undefined, undefined, undefined)).toEqual([]);
   });
 });

@@ -693,6 +693,83 @@ Panel {
             visible: root.activeView !== 0 || root.providerCount > 0
           }
 
+          // Abgeleitete Hinweise (Usage.tips()): Engpass, bevorstehender
+          // Reset, Spitzen-Vorlauf, Kostentreiber, freie Kapazität — alles
+          // aus den drei ohnehin geholten Quellen, höchstens drei Zeilen,
+          // Dringlichkeit zuerst. Verschwindet vollständig, wenn gerade
+          // kein Hinweis zutrifft. Dieselbe Rhythmik wie die anderen
+          // Ansichtsblöcke (topPadding 12 / spacing 8 / bottomPadding 8);
+          // die Trennlinie darüber liegt auf Ansichtsebene.
+          Column {
+            id: tipsView
+            width: parent.width
+            visible: root.activeView === 0 && tipsView.tipCount > 0
+            spacing: Style.space(8)
+            topPadding: Style.space(12)
+            bottomPadding: Style.space(8)
+
+            readonly property var entries: Usage.tips(
+              root.report, root.historySeries, root.statsData, root.alarmAt, root.nowMs)
+            readonly property int tipCount: entries.length
+
+            function tipAt(position) {
+              var list = tipsView.entries
+              return position >= 0 && position < list.length ? list[position] : null
+            }
+
+            Row {
+              width: parent.width
+
+              PanelSectionHeader {
+                id: tipsTitle
+                text: "Tipps"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                color: root.foreground
+              }
+
+              Item {
+                width: Math.max(0, parent.width - tipsTitle.implicitWidth - tipsMeta.width)
+                height: 1
+              }
+
+              PanelSectionHeader {
+                id: tipsMeta
+                text: "Kontingente · Verlauf · Kosten"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                font.bold: false
+                opacity: root.metaOpacity
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, parent.width * 0.6)
+              }
+            }
+
+            // Repeater über den Zähler, nicht über das Array — dieselbe
+            // Regel wie bei den Providern: entries wird bei jedem Abruf
+            // ersetzt, Delegates an Index-Identität zu binden hält den
+            // Block stabil. Nur Text, kein Meter — hier gibt es nichts zu
+            // animieren.
+            Repeater {
+              model: tipsView.tipCount
+
+              delegate: Text {
+                required property int index
+                width: tipsView.width
+                textFormat: Text.PlainText
+                text: tipsView.tipAt(index) ? tipsView.tipAt(index).text : ""
+                // Nur der Engpass trägt Alarmfarbe — Farbe überall hieße,
+                // alles sei gleichermaßen dringend, und dann wäre es nichts.
+                color: tipsView.tipAt(index) && tipsView.tipAt(index).alarm === true
+                       ? root.urgent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+              }
+            }
+          }
+
           Repeater {
             model: root.providerCount
 

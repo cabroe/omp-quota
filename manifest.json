@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cabroe.omp-quota",
   "name": "omp Kontingente",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": "cabroe",
   "license": "MIT",
   "description": "Provider-Kontingente des omp-Agents in der Omarchy-Bar: knappstes Fenster als Zahl, im Popup alle Fenster mit Füllstand und Reset-Zeit — umschaltbar auf Verbrauch (Verlauf je Fenster als Sparkline) und Analyse (Anfragen, Tokens, Kosten).",
