@@ -102,6 +102,10 @@ while [[ $# -gt 0 ]]; do
   --fresh) fresh=1 ;;
   history) mode=history ;;
   stats) mode=stats ;;
+  # Unbekanntes bleibt folgenlos: Das Widget darf nicht erblinden, nur weil
+  # ein künftiger Host ein Flag mehr mitschickt — eine Fehlerkarte statt der
+  # Kontingente wäre der schlechtere Tausch. Festgehalten in
+  # tests/usage-sh.test.js "unbekannte Flags brechen nichts".
   *) ;;
   esac
   shift
@@ -196,16 +200,14 @@ if ((status == 124 || status == 137)); then
   exit 1
 fi
 
-# 141 = SIGPIPE: head hat seine 5 MB gelesen und die Pipe geschlossen;
-# omp versucht weiterzuschreiben und bekommt SIGPIPE. Das ist kein Fehler,
-# sondern eine bewusste Begrenzung — das Teilstück ist gültiges JSON und wird
-# weiter unten verarbeitet. Nur den Fall behandeln, in dem stdout leer blieb.
+# 141 = SIGPIPE: head hat seine 5 MB gelesen und die Pipe geschlossen, omp
+# schreibt weiter und bekommt SIGPIPE. Das Teilstück ist mitten im Objekt
+# abgeschnitten und damit so gut wie nie gültiges JSON — es weiterzureichen
+# bräche die Zusage dieses Skripts und ersetzte die präzise Ursache durch
+# ein generisches "kein JSON" weiter oben in Usage.parse.
 if ((status == 141)); then
-  if [[ -z $report ]]; then
-    emit_error "$label Ausgabe ueberschreitet 5 MB (abgeschnitten)"
-    exit 1
-  fi
-  # report ist nicht leer — es ist das truncated JSON, also weitermachen.
+  emit_error "$label Ausgabe ueberschreitet 5 MB und wurde abgeschnitten"
+  exit 1
 fi
 
 if ((status != 0)) || [[ -z $report ]]; then
@@ -220,10 +222,12 @@ fi
 # Schutz davor, dass omp ein Banner oder eine Warnung vor die Nutzlast
 # schreibt: alles ab der ersten geschweiften Klammer behalten, damit eine
 # verirrte Zeile JSON.parse nicht zerbricht.
-# Der Range verlangt nach der `{` ein Zeichen, das ein Objekt eröffnet —
-# ein Key-Anführungszeichen, die sofort schließende Klammer oder das
-# Zeilenende bei Pretty-Print. Sonst passierte auch ein Text-Banner wie
-# "{warn} cache stale" als angeblicher Payload (Exit 0, invalides JSON).
+# Der Range verlangt nach der `{` — optionale Leerzeichen übersprungen —
+# ein Zeichen, das ein Objekt eröffnet: ein Key-Anführungszeichen, die
+# schließende Klammer oder das Zeilenende bei Pretty-Print. Sonst passierte
+# auch ein Text-Banner wie "{warn} cache stale" als angeblicher Payload
+# (Exit 0, invalides JSON). Ohne das `[[:space:]]*` verwarf der Ausdruck
+# ein völlig normales `{ "a": 1 }` samt Nutzlast.
 #
 # Bekannte Grenze: Das schneidet nur den Vorspann ab. Text NACH dem
 # JSON-Objekt (Trailing Garbage auf stdout) bliebe stehen und erreichte das
@@ -231,7 +235,7 @@ fi
 # statt zu crashen. omp schreibt Warnungen auf stderr (landen in der
 # Fehlermeldung), also ist das eine dokumentierte Grenze, kein Bug, den ein
 # fragiler sed-Parser beheben sollte.
-payload=$(printf '%s' "$report" | sed -n -E '/^[[:space:]]*\{(["}]|$)/,$p')
+payload=$(printf '%s' "$report" | sed -n -E '/^[[:space:]]*\{[[:space:]]*(["}]|$)/,$p')
 
 # Eine Ausgabe ganz ohne geschweifte Klammer war nie ein Report, und das sed
 # oben schneidet sie auf nichts zusammen. Dieses leere Ergebnis auszugeben

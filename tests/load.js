@@ -96,7 +96,21 @@ export function load(relativePath, names) {
   const cache = new Map();
   const exports = loadInternal(relativePath, TESTS_DIR, cache);
   const out = {};
-  for (const name of names)
+  for (const name of names) {
+    // Der Export-Scan ist eine Regex über `^var`/`^function` und sieht
+    // deshalb weniger als ein Parser: ein komma-kaskadiertes
+    // `var a = 1, b = 2;` liefert nur `a`. Ohne diese Prüfung landete `b`
+    // als undefined im Test und schlug erst weit später als
+    // "is not a function" auf — in einer Zeile, die mit der Ursache
+    // nichts zu tun hat.
+    if (!(name in exports))
+      throw new Error(
+        `load("${relativePath}"): Export "${name}" nicht gefunden. ` +
+        `Gefunden wurden: ${Object.keys(exports).join(", ") || "(keine)"}. ` +
+        `Deklariere das Symbol als eigenes top-level \`var\`/\`function\` — ` +
+        `mehrere Namen hinter einem \`var\` erkennt der Loader nicht.`,
+      );
     out[name] = exports[name];
+  }
   return out;
 }

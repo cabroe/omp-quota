@@ -7,8 +7,10 @@
 // PATH enthält nur die Tools, die usage.sh braucht (sed, mktemp, rm, timeout,
 // für den Fake-omp zusätzlich sleep) plus einen mise-Stub mit exit 1 — sonst
 // findet `mise which omp` das echte omp und der Test macht echte API-Calls.
-// /usr/bin/omp und /usr/local/bin/omp sind absolute Kandidaten und auf diesem
-// Host abwesend; HOME zeigt auf ein leeres Sandbox-Verzeichnis.
+// /usr/bin/omp und /usr/local/bin/omp sind absolute Kandidaten in find_omp,
+// die kein PATH und kein mise-Stub abfängt; `assertNoAbsoluteOmp()` unten
+// bricht den Lauf ab, falls sie existieren. HOME zeigt auf ein leeres
+// Sandbox-Verzeichnis.
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   mkdtempSync,
@@ -18,6 +20,7 @@ import {
   symlinkSync,
   readFileSync,
   rmSync,
+  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,7 +75,27 @@ function jsonOk(out) {
   return parsed;
 }
 
+// find_omp prüft /usr/local/bin/omp und /usr/bin/omp mit absoluten Pfaden.
+// Weder der isolierte PATH noch der mise-Stub greift dort. Auf einem Host
+// mit paketiertem omp (CI-Image, Distributionspaket) würde der Test nach
+// dem Entfernen des Fake-omp das echte Binary starten und eine Live-
+// Provider-API befragen. Das war bisher nur ein Kommentar über diesen
+// Host; hier wird es geprüft, damit die Isolation nicht stillschweigend
+// von der Maschine abhängt.
+const ABSOLUTE_OMP_CANDIDATES = ["/usr/local/bin/omp", "/usr/bin/omp"];
+
+function assertNoAbsoluteOmp() {
+  const present = ABSOLUTE_OMP_CANDIDATES.filter((p) => existsSync(p));
+  if (present.length > 0)
+    throw new Error(
+      `Testisolation nicht gegeben: ${present.join(", ")} existiert. ` +
+      `find_omp würde dieses echte omp über einen absoluten Pfad starten ` +
+      `und echte Provider-APIs befragen.`,
+    );
+}
+
 beforeEach(() => {
+  assertNoAbsoluteOmp();
   const root = mkdtempSync(join(tmpdir(), "omp-quota-test-"));
   const isolated = join(root, "isolated");
   mkdirSync(isolated);
@@ -213,6 +236,25 @@ describe("usage.sh JSON-Garantie", () => {
     expect(jsonOk(stdout).error).toContain("lieferte kein JSON-Objekt");
   });
 
+  // Regression: Der Sed-Range verlangte unmittelbar nach der `{` ein
+  // objektöffnendes Zeichen. Ein völlig normales `{ "reports": [] }` mit
+  // Leerzeichen danach fiel damit komplett weg — das Skript meldete
+  // "lieferte kein JSON-Objekt" für gültiges JSON. Die Abwehr gegen
+  // Text-Banner (Test darüber) muss dabei erhalten bleiben.
+  test("Leerzeichen nach der öffnenden Klammer verwirft den Payload nicht", async () => {
+    makeOmp(`echo '{ "reports": [], "generatedAt": 1 }'`);
+    const { exitCode, stdout } = await runUsage();
+    expect(exitCode).toBe(0);
+    expect(jsonOk(stdout)).toEqual({ reports: [], generatedAt: 1 });
+  });
+
+  test("Banner mit Leerzeichen nach der Klammer passiert weiterhin nicht", async () => {
+    makeOmp(`echo '{ warn} cache stale'`);
+    const { exitCode, stdout } = await runUsage();
+    expect(exitCode).toBe(1);
+    expect(jsonOk(stdout).error).toContain("lieferte kein JSON-Objekt");
+  });
+
   // Eine C-Locale schneidet ${1:0:400} byteweise und zerteilt Multibyte —
   // verwaiste Bytes machten das JSON byteseitig unlesbar. Strikter
   // TextDecoder (fatal) ist der harte Beweis; JSON.parse allein wäre zu
@@ -243,12 +285,17 @@ describe("usage.sh JSON-Garantie", () => {
 
   // stdout bekommt denselben OOM-Schutz wie stderr: jenseits von 5 MB wird
   // gekappt — der Report geht verloren, aber es kommt ein Fehler-JSON statt
-  // eines OOM-Abbruchs.
-  test("riesiges stdout wird gekappt, Fehler-JSON bleibt die Antwort", async () => {
+  // eines OOM-Abbruchs. Das abgeschnittene Teilstück darf NICHT als Payload
+  // durchgereicht werden: mitten im Objekt gekappt ist es kein JSON, und
+  // Usage.parse machte daraus ein generisches "kein JSON", das die wahre
+  // Ursache (die Kappung) verschweigt.
+  test("riesiges stdout wird gekappt und nennt die Kappung als Ursache", async () => {
     makeOmp(`head -c 6000000 /dev/zero | tr '\\0' 'x'; echo '{"reports":[]}'`);
     const { exitCode, stdout } = await runUsage();
     expect(exitCode).toBe(1);
-    expect(jsonOk(stdout).error).toContain("fehlgeschlagen");
+    const error = jsonOk(stdout).error;
+    expect(error).toContain("5 MB");
+    expect(error).not.toContain("xxxx");
   }, 20_000);
 });
 

@@ -402,17 +402,21 @@ Panel {
     // Läuft nicht mehr, hat aber nichts geliefert: Skript fehlt, /bin/bash
     // fehlt oder der Prozess wurde abgeschossen. usage.sh selbst meldet
     // seine eigenen Fehler als JSON, die sind hier längst verarbeitet.
-    // Quickshell garantiert nicht, dass onRunningChanged vor onStreamFinished
-    // oder danach feuert — beides ist möglich. Mit Qt.callLater wird
-    // failFetch asynchron aufgerufen, damit ein bereits laufendes
-    // onStreamFinished (das applyReport mit dem gültigen Report aufruft)
-    // zuerst drankommt. applyReport setzt pending=false; failFetch ist
-    // dann ein No-Op. Bleibt pending=true, lief kein Stream-Finished und
-    // der Fehler wird gemeldet.
+    //
+    // Synchron, nicht über Qt.callLater: gemessen mit Quickshell 0.3.1
+    // feuert onStreamFinished immer VOR onRunningChanged — im Normalfall,
+    // beim SIGKILL mit Teilausgabe (die Teildaten kommen noch an) und
+    // beim gar nicht startenden Prozess (dort feuert nur onRunningChanged,
+    // was genau der Fall ist, für den failFetch existiert). applyReport
+    // hat also längst pending=false gesetzt, wenn es etwas zu melden gab.
+    // Ein deferriertes failFetch wäre sogar schädlich: drainQueue() startet
+    // hier synchron den nächsten Abruf und setzt pending wieder auf true —
+    // das verspätete failFetch würde dann DESSEN Zustand abreißen und
+    // seinen Watchdog stoppen.
     onRunningChanged: {
       if (running)
         return
-      Qt.callLater(root.failFetch, "Abruf lieferte keine Ausgabe — usage.sh oder /bin/bash fehlt")
+      root.failFetch("Abruf lieferte keine Ausgabe — usage.sh oder /bin/bash fehlt")
       root.drainQueue()
     }
   }
