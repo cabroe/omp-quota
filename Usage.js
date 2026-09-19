@@ -861,11 +861,13 @@ function formatMoney(value) {
   var n = num(value);
   if (!isFinite(n))
     return "";
-  // Erst auf 2 Dezimalstellen runden: 999.999 -> 1000.00 (IEEE-754-Effekt
-  // bei der Gleitkomma-Darstellung von 999.999). Dann Schwelle auf dem
-  // gerundeten Wert: 1000.00 >= 1000 -> "$1000"; 999.99 -> 999.99 < 1000
-  // -> "$999,99". Vorher prüfte die Schwelle auf dem Ungerundeten, und
-  // toFixed(2) rundete 999.999 zu "1000.00" -> "$1000,00" (falsch).
+  // Erst auf 2 Dezimalstellen runden, dann die Schwelle auf dem gerundeten
+  // Wert prüfen: 999.999 rundet kaufmännisch zu 1000.00, und 1000.00 >= 1000
+  // -> "$1000"; 999.99 bleibt 999.99 < 1000 -> "$999,99". Vorher prüfte die
+  // Schwelle den ungerundeten Wert, und toFixed(2) rundete 999.999 nachträglich
+  // zu "1000.00" -> "$1000,00": vier Stellen plus Cents für einen Wert, der
+  // laut Schwelle keine Cents mehr haben sollte. (Kein IEEE-Sonderfall — die
+  // Aufwärtsrundung käme auch in exakter Arithmetik zustande.)
   var rounded = Math.round(n * 100) / 100;
   var text = Math.abs(rounded) >= 1000 ? String(Math.round(rounded)) : rounded.toFixed(2);
   return (rounded < 0 ? "-$" : "$") + text.replace("-", "").replace(".", ",");

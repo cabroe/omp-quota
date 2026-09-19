@@ -1165,12 +1165,13 @@ describe("formatMoney", () => {
     expect(usage.formatMoney(1234.56)).toBe("$1235");
   });
 
-  test("regression: IEEE-754-Rundung an der 1000-Schwelle", () => {
+  test("regression: Rundung an der 1000-Schwelle", () => {
     // Vorher: formatMoney(999.999) prüfte die Schwelle auf dem ungerundeten
-    // Wert (< 1000) und gab dann n.toFixed(2) aus — JS rundet 999.999
-    // intern zu 1000.00 ("$1000,00"), eine 4+2-Darstellung für einen
-    // Wert unter 1000. Jetzt: erst auf 2 Dezimalstellen runden, dann
-    // Schwelle auf dem gerundeten Wert prüfen.
+    // Wert (< 1000) und gab dann n.toFixed(2) aus — kaufmännisches Runden
+    // macht aus 999.999 dort "1000.00" ("$1000,00"), eine 4+2-Darstellung
+    // für einen Wert, der laut Schwelle keine Cents mehr haben sollte.
+    // Jetzt: erst auf 2 Dezimalstellen runden, dann Schwelle auf dem
+    // gerundeten Wert prüfen.
     expect(usage.formatMoney(999.999)).toBe("$1000");
     expect(usage.formatMoney(999.995)).toBe("$1000");
     // Knapp darunter bleibt im Cent-Bereich.
@@ -1193,7 +1194,7 @@ describe("formatMoney", () => {
     expect(usage.formatMoney(-1234.56)).toBe("-$1235");
   });
 
-  test("regression: negatives IEEE-754 an der Schwelle — -999.999 ergibt -$1000, nicht -$1000,00", () => {
+  test("regression: negative Rundung an der Schwelle — -999.999 ergibt -$1000, nicht -$1000,00", () => {
     // gerundet: -999.999 -> -1000.00; Schwelle >= 1000 -> String(Math.round(-1000)) = "-1000"
     expect(usage.formatMoney(-999.999)).toBe("-$1000");
   });

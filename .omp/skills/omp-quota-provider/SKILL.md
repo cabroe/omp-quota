@@ -170,7 +170,7 @@ QT_QPA_PLATFORM=offscreen qml6 SmokeCheck.qml; echo "exit=$? (42=ok)"; rm -f Smo
 Laufende Shell (Dateispeichern lädt das Widget NICHT neu):
 
 ```sh
-omarchy restart shell && sleep 7 && omarchy-shell cabroe.omp-quota open
+omarchy restart shell && sleep 4 && omarchy-shell cabroe.omp-quota open
 grim /tmp/quota.png        # Kopfzeile, Zeilen, Meter prüfen
 omarchy-shell cabroe.omp-quota close
 ```

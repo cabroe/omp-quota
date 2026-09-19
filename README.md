@@ -37,7 +37,6 @@ MiniMax Code                                  Modell general
   General · 5 Hour                         2h 42m          8%
   ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
   General · 7 Day                      unbegrenzt           ∞
-  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 Line by line:

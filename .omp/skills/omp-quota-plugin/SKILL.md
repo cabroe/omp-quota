@@ -123,6 +123,10 @@ omarchy bar set cabroe.omp-quota redact true --json
   der letzten 24 h für die Analyse-Ansicht; die Präambel "Synced …"
   schneidet die bestehende Sed-Pipeline ab). Alle Guards und die
   JSON-Garantie gelten in allen drei Modi unverändert.
+  `--redact` hängt nur im Live- und Verlaufsmodus am omp-Aufruf — auch die
+  History nennt Konten, also wird sie mitgekürzt. `omp stats` kennt das Flag
+  nicht (`Unknown option`, exit 1) und lässt es weg; ein blindes Anhängen
+  ließ die Analyse-Ansicht leer.
 - **stdout ist immer ein JSON-Objekt**, auch im Fehlerfall (`{"error": "..."}`
   mit omps stderr). Escaping über Parameter-Expansion in `json_string()`,
   **nie über sed** — die frühere sed-Pipeline ließ Zeilenumbrüche und
