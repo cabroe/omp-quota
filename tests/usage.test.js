@@ -369,6 +369,16 @@ describe("compact / decimal / plural", () => {
     expect(usage.compact(1000000)).toBe("1M");
   });
 
+  test("regression: Schwellen prüfen den gerundeten Wert — 999.9 ist 1k, nicht '1000'", () => {
+    // Vorher: die Schwelle sah den ungerundeten Wert, Math.round lieferte
+    // dann 1000 — "1000" unterhalb der k-Schwelle bzw. "1000k" statt "1M".
+    // Derselbe Bug-Typ, den formatMoney an der 1000er-Grenze schon hatte.
+    expect(usage.compact(999.9)).toBe("1k");
+    expect(usage.compact(-999.9)).toBe("-1k");
+    expect(usage.compact(999999.6)).toBe("1M");
+    expect(usage.compact(999.4)).toBe("999");
+  });
+
   test("Nicht-Zahlen bleiben leer", () => {
     expect(usage.compact(NaN)).toBe("");
   });
@@ -713,6 +723,13 @@ describe("untilText", () => {
     expect(usage.untilText(NaN, now)).toBe("");
     expect(usage.untilText(undefined, now)).toBe("");
   });
+
+  test("regression: fehlende Uhrzeit ist leer, kein Date.now()-Fallback", () => {
+    // Der Puritätsvertrag (AGENTS.md) verbietet Date.now() in Usage.js;
+    // der stille Fallback machte Tests mit now = NaN nicht-deterministisch.
+    expect(usage.untilText(now, NaN)).toBe("");
+    expect(usage.untilText(now, undefined)).toBe("");
+  });
 });
 
 describe("agoText", () => {
@@ -731,6 +748,11 @@ describe("agoText", () => {
 
   test("fehlerhafte Eingaben", () => {
     expect(usage.agoText(NaN, now)).toBe("");
+  });
+
+  test("regression: fehlende Uhrzeit ist leer, kein Date.now()-Fallback", () => {
+    expect(usage.agoText(now, NaN)).toBe("");
+    expect(usage.agoText(now, undefined)).toBe("");
   });
 });
 
@@ -1172,6 +1194,28 @@ describe("parseStats", () => {
     expect(stats.models[0].providerName).toBe("");
   });
 
+  test("regression: fehlende totalRequests sind 0 statt NaN", () => {
+    // Vorher: requests: Math.round(num(undefined)) = NaN — der Sort-Tiebreak
+    // b.requests - a.requests wurde dann NaN (Einfügereihenfolge) und der
+    // Modellzeile fehlte die Anfragenzahl. Gleicher Guard wie top-level.
+    const { stats } = usage.parseStats(JSON.stringify({
+      overall: { totalCost: 10, totalRequests: 5 },
+      byModel: [
+        { model: "ohne", totalCost: 9 },
+        { model: "mit", totalCost: 1, totalRequests: 3 },
+      ],
+    }));
+    const byName = {};
+    for (const m of stats.models)
+      byName[m.name] = m;
+    expect(byName["ohne"].requests).toBe(0);
+    expect(byName["mit"].requests).toBe(3);
+    // Der Sort-Comparator vergleicht keine NaN mehr: bei ungleichen Kosten
+    // entscheidet der Cost-Sort, bei Gleichstand der Requests-Tiebreak —
+    // beides ohne die frühere Einfügereihenfolge-Ausgabe.
+    expect(stats.models.map((m) => m.name)).toEqual(["ohne", "mit"]);
+  });
+
   test("Modelle nach Kosten absteigend, bei Gleichstand nach Last", () => {
     const { stats } = usage.parseStats(STATS_RAW);
     expect(stats.models.map((m) => m.name)).toEqual([
@@ -1247,8 +1291,15 @@ describe("formatMoney", () => {
   });
 
   test("regression: negative Rundung an der Schwelle — -999.999 ergibt -$1000, nicht -$1000,00", () => {
-    // gerundet: -999.999 -> -1000.00; Schwelle >= 1000 -> String(Math.round(-1000)) = "-1000"
+    // gerundet: -999.999 -> -1000.00; Schwelle >= 1000 -> String(Math.round(1000)) = "1000"
     expect(usage.formatMoney(-999.999)).toBe("-$1000");
+  });
+
+  test("regression: Rundung symmetrisch zur Null — -1234.5 ist -$1235 wie +1234.5 zu $1235", () => {
+    // Vorher: Math.round richtet nach +∞, also 1234.5 -> "$1235", aber
+    // -1234.5 -> "-$1234". Der Betrag wird jetzt absolutet gerunden.
+    expect(usage.formatMoney(1234.5)).toBe("$1235");
+    expect(usage.formatMoney(-1234.5)).toBe("-$1235");
   });
 
   test("-0.00 zeigt nicht $-0,00", () => {

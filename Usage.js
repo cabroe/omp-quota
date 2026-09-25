@@ -92,17 +92,21 @@ function plural(count, one, many) {
 }
 
 // Kompakte Zahl mit deutschem Dezimalkomma: 850, 1,2k, 12k, 4,1M. Token-
-// Fenster reden in Millionen, Request-Fenster in Dutzenden.
+// Fenster reden in Millionen, Request-Fenster in Dutzenden. Die Schwellen
+// prüfen den GERUNDETEN Wert — 999,9 würde sonst als "1000" durchgehen,
+// weil die Schwelle den ungerundeten Wert sah (dasselbe Muster, das
+// formatMoney an der 1000er-Grenze schon hatte).
 function compact(value) {
   var n = num(value);
   if (!isFinite(n))
     return "";
-  var abs = Math.abs(n);
+  var rounded = Math.round(n);
+  var abs = Math.abs(rounded);
   if (abs < 1000)
-    return String(Math.round(n));
+    return String(rounded);
   if (abs < 1000000)
-    return decimal(n / 1000, abs < 10000) + "k";
-  return decimal(n / 1000000, true) + "M";
+    return decimal(rounded / 1000, abs < 10000) + "k";
+  return decimal(rounded / 1000000, true) + "M";
 }
 
 function decimal(value, withFraction) {
@@ -481,11 +485,14 @@ function failed(message) {
 }
 
 // "in 4h 52m" bis zum Reset. Kurze Fenster brauchen Minuten, lange nicht.
+// Beide Zeitparameter müssen gültig sein — ohne Uhrzeit keine Aussage statt
+// stiller Date.now()-Fallback (Puritätsvertrag: die Zeit kommt als Parameter).
 function untilText(resetsAt, now) {
   var target = num(resetsAt);
-  if (!isFinite(target))
+  var nowNum = num(now);
+  if (!isFinite(target) || !isFinite(nowNum))
     return "";
-  var diff = target - (isFinite(num(now)) ? num(now) : Date.now());
+  var diff = target - nowNum;
   if (diff <= 0)
     return "jetzt";
 
@@ -506,12 +513,14 @@ function untilText(resetsAt, now) {
   return restHours > 0 ? days + "d " + restHours + "h" : days + "d";
 }
 
-// "vor 3m" seit dem letzten Abruf.
+// "vor 3m" seit dem letzten Abruf. Beide Zeitparameter müssen gültig sein —
+// ohne Uhrzeit keine Aussage statt stiller Date.now()-Fallback (Puritätsvertrag).
 function agoText(timestamp, now) {
   var then = num(timestamp);
-  if (!isFinite(then))
+  var nowNum = num(now);
+  if (!isFinite(then) || !isFinite(nowNum))
     return "";
-  var diff = (isFinite(num(now)) ? num(now) : Date.now()) - then;
+  var diff = nowNum - then;
   if (diff < 0)
     return "gerade";
   var minutes = Math.floor(diff / 60000);
@@ -842,7 +851,9 @@ function parseStats(raw) {
       // Zusatz hinter dem Modellnamen — und "Unbekannt" behauptet einen
       // Provider, den omp gar nicht gemeldet hat.
       providerName: providerId.length > 0 ? Providers.resolve(providerId).name : "",
-      requests: Math.round(num(entry.totalRequests)),
+      // Gleicher Guard wie bei den top-level-Zahlen: ohne ihn würde ein
+      // fehlendes totalRequests als NaN in Sortierung und Anzeige landen.
+      requests: isFinite(num(entry.totalRequests)) ? Math.round(num(entry.totalRequests)) : 0,
       cost: cost,
       // Anteil an den Gesamtkosten: treibt den Meter unter der Zeile.
       // Ohne messbare Kosten (Abo-Modell, Gesamtsumme 0) bleibt er 0 —
@@ -893,8 +904,13 @@ function formatMoney(value) {
   // laut Schwelle keine Cents mehr haben sollte. (Kein IEEE-Sonderfall — die
   // Aufwärtsrundung käme auch in exakter Arithmetik zustande.)
   var rounded = Math.round(n * 100) / 100;
-  var text = Math.abs(rounded) >= 1000 ? String(Math.round(rounded)) : rounded.toFixed(2);
-  return (rounded < 0 ? "-$" : "$") + text.replace("-", "").replace(".", ",");
+  // Der Betrag wird absolutet gerundet und geprüft — Math.round richtet
+  // nach +∞, sonst wäre -1234.5 als "-$1234" gezeigt worden, während
+  // +1234.5 zu "$1235" wurde. Das Vorzeichen trägt nur der Prefix; ein
+  // .replace("-","") im Text wäre damit toter Code.
+  var magnitude = Math.abs(rounded);
+  var text = magnitude >= 1000 ? String(Math.round(magnitude)) : magnitude.toFixed(2);
+  return (rounded < 0 ? "-$" : "$") + text.replace(".", ",");
 }
 
 // ---------------------------------------------------------------- Tipps
