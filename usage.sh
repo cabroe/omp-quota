@@ -66,7 +66,12 @@ emit_error() {
 find_omp() {
   local candidate
 
-  candidate=$(command -v omp 2>/dev/null) && [[ -n $candidate ]] && {
+  # Nur absolute Pfade: enthält PATH einen relativen Eintrag (klassisch "."
+  # oder ein leeres Feld), liefert `command -v` einen relativen Treffer, und
+  # das Skript läuft mit dem Plugin-Verzeichnis als cwd — eine dort
+  # abgelegte Datei namens `omp` würde ausgeführt. Die feste Liste unten
+  # fängt den Normalfall ohnehin ab.
+  candidate=$(command -v omp 2>/dev/null) && [[ $candidate == /* && -x $candidate ]] && {
     printf '%s\n' "$candidate"
     return 0
   }
@@ -100,8 +105,17 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
   --redact) redact=1 ;;
   --fresh) fresh=1 ;;
-  history) mode=history ;;
-  stats) mode=stats ;;
+  history | stats)
+    # Zwei verschiedene Modi in einem Aufruf sind ein Aufruffehler, kein
+    # unbekanntes Flag: still den letzten gewinnen zu lassen lieferte
+    # lautlos die falschen Daten (`usage.sh history stats` las die
+    # Statistik, die Sparklines blieben leer).
+    if [[ $mode != live && $mode != "$1" ]]; then
+      emit_error "Widersprüchliche Modi: $mode und $1"
+      exit 1
+    fi
+    mode=$1
+    ;;
   # Unbekanntes bleibt folgenlos: Das Widget darf nicht erblinden, nur weil
   # ein künftiger Host ein Flag mehr mitschickt — eine Fehlerkarte statt der
   # Kontingente wäre der schlechtere Tausch. Festgehalten in

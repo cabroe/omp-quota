@@ -375,4 +375,26 @@ describe("usage.sh Argumente", () => {
     await runUsage(["stats", "--fresh"]);
     expect(readFileSync(sandbox.calls, "utf8").trim()).toBe("stats --json");
   });
+
+  test("zwei verschiedene Modi: Fehlerobjekt statt still falscher Daten", async () => {
+    // `usage.sh history stats` lief vorher last-write-wins im Stats-Modus;
+    // der Aufrufer bekam lautlos die Statistik und die Sparklines blieben
+    // leer. Ein Aufruffehler gehört gemeldet, nicht geraten.
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"overall":{}}'`);
+    const { exitCode, stdout } = await runUsage(["history", "stats"]);
+    expect(exitCode).toBe(1);
+    expect(jsonOk(stdout).error).toContain("Widersprüchliche Modi");
+    // Kein omp-Aufruf: die Logdatei entsteht erst beim ersten Start, der
+    // Fehler fällt davor auf.
+    expect(existsSync(sandbox.calls)).toBe(false);
+  });
+
+  test("derselbe Modus doppelt ist kein Konflikt", async () => {
+    makeOmp(`printf '%s\\n' "$*" >> "$OMP_CALLS"; echo '{"entries":[]}'`);
+    const { exitCode } = await runUsage(["history", "history"]);
+    expect(exitCode).toBe(0);
+    expect(readFileSync(sandbox.calls, "utf8").trim()).toBe(
+      "usage --json --history --days 7",
+    );
+  });
 });
