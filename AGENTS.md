@@ -86,7 +86,7 @@ refreshStats() (popup open only) ──► Usage.js: parseStats()
 | `providers/` | One descriptor per provider whose name spelling or behavior deviates from derivation (5 files; `anthropic`, `google-antigravity` deliberately none) |
 | `usage.sh` | PATH-robust wrapper: `omp usage --json`, `history` → `--history --days 7`, `stats` → `omp stats --json`; timeouts, JSON guarantee |
 | `tests/` | `bun test` suites + `load.js` (QML-library loader for Bun) |
-| `scripts/sync-providers.js` | Regenerates the marked registry block in `Providers.js` from `providers/*.js` (`--check` for CI/drift test) |
+| `scripts/sync-providers.js` | Regenerates the marked registry block in `Providers.js` from `providers/*.js`. Self-healing contract (pinned in `tests/sync-providers.test.js`): content drift between intact markers is rewritten to canonical; structural marker damage (duplicate/missing) aborts WITHOUT writing. Flags: `--check` (CI/drift test), `--root=<dir>` (test fixtures) |
 | `.omp/skills/` | Two project skills: `omp-quota-provider` (add a provider) and `omp-quota-plugin` (the widget itself — settings, lifecycle, colours, `usage.sh`). Both are required; the `skill` rule enforces existence, frontmatter and API references |
 | `.github/workflows/tests.yml` | CI: `bun test` on push/PR to `main` |
 

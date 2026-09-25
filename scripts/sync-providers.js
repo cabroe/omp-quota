@@ -24,7 +24,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load } from "../tests/load.js";
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
+// --root= erlaubt Tests, den Sync gegen ein Temp-Fixture zu fahren
+// (dasselbe Muster wie scripts/analyze.js). Default: das echte Plugin.
+const rootArg = process.argv.find((a) => a.startsWith("--root="));
+const root = rootArg ? rootArg.slice("--root=".length) : dirname(dirname(fileURLToPath(import.meta.url)));
 const providersDir = join(root, "providers");
 const providersJs = join(root, "Providers.js");
 
@@ -32,8 +35,9 @@ const MARKER_BEGIN = "// >>> provider-plugins >>>";
 const MARKER_END = "// <<< provider-plugins <<<";
 
 const checkOnly = process.argv.includes("--check");
-if (process.argv.slice(2).some((a) => !["--check"].includes(a))) {
-  console.error("usage: bun scripts/sync-providers.js [--check]");
+const allowed = ["--check", ...(rootArg ? [rootArg] : [])];
+if (process.argv.slice(2).some((a) => !allowed.includes(a))) {
+  console.error("usage: bun scripts/sync-providers.js [--check] [--root=<dir>]");
   process.exit(2);
 }
 
@@ -50,7 +54,9 @@ const files = readdirSync(providersDir)
 
 const entries = [];
 for (const file of files) {
-  const plugin = load(`../providers/${file}`, ["descriptor"]);
+  // Absoluter Pfad: load() löst relative Pfade gegen tests/ auf, der Sync
+  // aber gegen sein --root — bei Temp-Fixtures sonst die falsche Datei.
+  const plugin = load(join(providersDir, file), ["descriptor"]);
   const d = plugin.descriptor;
   if (!d.id || !d.name)
     fail(`providers/${file}: Descriptor braucht id und name.`);
