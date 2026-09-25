@@ -825,17 +825,26 @@ function parseStats(raw) {
     : {};
 
   var rawModels = data.byModel instanceof Array ? data.byModel : [];
+  var totalCost = num(overall.totalCost);
   var models = [];
   for (var i = 0; i < rawModels.length; i++) {
     var entry = rawModels[i] || {};
     var name = String(entry.model || "").trim();
     if (name.length === 0)
       continue;
+    var cost = num(entry.totalCost);
     models.push({
       name: name,
       provider: String(entry.provider || "").trim(),
+      providerName: Providers.resolve(String(entry.provider || "").trim()).name,
       requests: Math.round(num(entry.totalRequests)),
-      cost: num(entry.totalCost),
+      cost: cost,
+      // Anteil an den Gesamtkosten: treibt den Meter unter der Zeile.
+      // Ohne messbare Kosten (Abo-Modell, Gesamtsumme 0) bleibt er 0 —
+      // der Meter verschwindet, statt eine falsche Aussage zu treffen.
+      share: isFinite(cost) && isFinite(totalCost) && totalCost > 0 && cost > 0
+        ? Math.min(1, cost / totalCost)
+        : 0,
     });
   }
   // Teuer zuerst, bei Gleichstand (Abo-Modelle kosten 0) nach Last. NaN-
@@ -856,6 +865,8 @@ function parseStats(raw) {
       inputTokens: num(overall.totalInputTokens),
       outputTokens: num(overall.totalOutputTokens),
       cacheRate: num(overall.cacheRate),
+      cacheSavings: num(overall.cacheSavings),
+      tokensPerSecond: num(overall.avgTokensPerSecond),
       cost: num(overall.totalCost),
       models: models,
     },

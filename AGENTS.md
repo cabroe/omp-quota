@@ -53,9 +53,11 @@ refreshStats() (popup open only) ──► Usage.js: parseStats()
    the providers by that peak — each row with a large 26-bucket
    sparkline, plus `Usage.historySummary()` — average, peak, snapshot
    count, last snapshot age) and "Analyse" (stats view:
-   requests/errors/tokens/cache, today's cost and per-model rows sorted
-   by cost). Tab order: Kontingente, Verbrauch, Analyse. The Kontingente
-   view opens with up to three derived hints (`Usage.tips()`: bottleneck,
+   requests/errors/tokens/cache incl. savings and avg tokens/s, 24h cost,
+   per-model rows sorted by cost with provider name, a cost-share meter
+   (calm, no alarm ramp) and an "Abo" label instead of a price for
+   unpriced models). Tab order: Kontingente, Verbrauch, Analyse. The
+   Kontingente view opens with up to three derived hints (`Usage.tips()`:
    imminent reset, 7-day peak, cost driver, spare capacity — priority
    order, only the bottleneck in urgent colour; the block disappears
    entirely when nothing applies).

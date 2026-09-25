@@ -856,8 +856,16 @@ Panel {
                 var tokens = s.inputTokens + s.outputTokens
                 if (isFinite(tokens) && tokens > 0)
                   parts.push(Usage.compact(tokens) + " Tokens")
-                if (isFinite(s.cacheRate) && s.cacheRate > 0)
-                  parts.push(Math.round(s.cacheRate * 100) + "% Cache")
+                if (isFinite(s.cacheRate) && s.cacheRate > 0) {
+                  // Cache-Rate und Ersparnis zusammen: die Rate allein sagt
+                  // nicht, wie viel der Prompt-Input nicht voll bezahlt wurde.
+                  var cache = Math.round(s.cacheRate * 100) + "% Cache"
+                  if (isFinite(s.cacheSavings) && s.cacheSavings > 0)
+                    cache += " (spart " + Math.round(s.cacheSavings * 100) + "%)"
+                  parts.push(cache)
+                }
+                if (isFinite(s.tokensPerSecond) && s.tokensPerSecond > 0)
+                  parts.push("Ø " + Math.round(s.tokensPerSecond) + " Tok/s")
                 return parts.join("  ·  ")
               }
               color: root.foreground
@@ -877,58 +885,113 @@ Panel {
               font.bold: true
             }
 
-            // Modelle: Name links, Last und Kosten rechts. Der Spacer
-            // zieht dieselbe Tail-Breite ab wie der Titel einräumt —
-            // dieselbe Regel wie in LimitRow.
+            // Modelle: Name mit Provider links, Last und Kosten rechts,
+            // darunter der Kosten-Anteil als Meter. Der Anteil ist keine
+            // Alarmskala — ein teures Modell ist keine Warnung —, deshalb
+            // bleibt die Füllung durchgehend calm. Unbepreiste Modelle
+            // (Anteil 0) zeigen ein ehrliches "Abo" und keinen Meter.
             Repeater {
               model: statsView.modelCount
 
-              delegate: Row {
+              delegate: Column {
                 id: modelRow
                 required property int index
                 width: statsView.width
 
                 readonly property var entry: statsView.stats.models[index]
-                // Was rechts steht: Last und Kosten. Einmal benannt —
-                // Titelbreite und Spacer ziehen denselben Wert ab.
-                readonly property real tail: modelReqs.implicitWidth + modelCost.implicitWidth
+                readonly property bool priced: isFinite(modelRow.entry.cost) && modelRow.entry.cost > 0
 
-                Text {
-                  id: modelName
-                  textFormat: Text.PlainText
-                  text: modelRow.entry.name
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  elide: Text.ElideRight
-                  width: Math.min(implicitWidth, Math.max(0, parent.width - modelRow.tail - Style.space(12)))
+                Row {
+                  width: parent.width
+
+                  // Zwei benannte Maße, je nachdem was sie begrenzen:
+                  // lead = links (Name + Provider), tail = rechts (Last +
+                  // Kosten). Titel-, Provider- und Spacer-Breite ziehen
+                  // dieselben Werte ab — dieselbe Regel wie in LimitRow.
+                  readonly property real lead: modelName.implicitWidth + (modelProvider.visible ? modelProvider.width + modelProvider.leftPadding : 0)
+                  readonly property real tail: modelReqs.implicitWidth + modelCost.implicitWidth
+
+                  Text {
+                    id: modelName
+                    textFormat: Text.PlainText
+                    text: modelRow.entry.name
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    elide: Text.ElideRight
+                    width: Math.min(implicitWidth, Math.max(0, parent.width - parent.tail - Style.space(12)))
+                  }
+
+                  Text {
+                    id: modelProvider
+                    visible: text.length > 0 && modelRow.entry.providerName !== modelRow.entry.name
+                    textFormat: Text.PlainText
+                    text: modelRow.entry.providerName
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    leftPadding: Style.space(8)
+                    elide: Text.ElideRight
+                    // Nach dem Namen, aber nie über die rechte Seite:
+                    // auf 30 % der Zeile gedeckelt.
+                    width: Math.min(implicitWidth, parent.width * 0.3)
+                    anchors.baseline: modelName.baseline
+                  }
+
+                  Item {
+                    width: Math.max(0, parent.width - parent.lead - parent.tail)
+                    height: 1
+                  }
+
+                  Text {
+                    id: modelReqs
+                    textFormat: Text.PlainText
+                    text: Usage.compact(modelRow.entry.requests)
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    rightPadding: text !== "" ? Style.space(8) : 0
+                    anchors.baseline: modelName.baseline
+                  }
+
+                  Text {
+                    id: modelCost
+                    textFormat: Text.PlainText
+                    text: modelRow.priced ? Usage.formatMoney(modelRow.entry.cost) : "Abo"
+                    color: modelRow.priced ? root.foreground : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.baseline: modelName.baseline
+                  }
                 }
 
                 Item {
-                  width: Math.max(0, parent.width - modelName.width - modelRow.tail)
-                  height: 1
-                }
+                  width: parent.width
+                  visible: modelRow.entry.share > 0
+                  implicitHeight: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
 
-                Text {
-                  id: modelReqs
-                  textFormat: Text.PlainText
-                  text: Usage.compact(modelRow.entry.requests)
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  rightPadding: text !== "" ? Style.space(8) : 0
-                  anchors.baseline: modelName.baseline
-                }
+                  Rectangle {
+                    id: shareTrack
+                    anchors.fill: parent
+                    radius: height / 2
+                    color: root.track
+                  }
 
-                Text {
-                  id: modelCost
-                  textFormat: Text.PlainText
-                  text: isFinite(modelRow.entry.cost) && modelRow.entry.cost > 0
-                        ? Usage.formatMoney(modelRow.entry.cost) : "—"
-                  color: isFinite(modelRow.entry.cost) && modelRow.entry.cost > 0 ? root.foreground : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  anchors.baseline: modelName.baseline
+                  Rectangle {
+                    anchors.left: shareTrack.left
+                    anchors.verticalCenter: shareTrack.verticalCenter
+                    height: shareTrack.height
+                    radius: shareTrack.radius
+                    width: shareTrack.width * Math.max(0, Math.min(1, modelRow.entry.share))
+                    color: root.calm
+
+                    Behavior on width {
+                      NumberAnimation {
+                        duration: 160
+                        easing.type: Easing.OutCubic
+                      }
+                    }
+                  }
                 }
               }
             }

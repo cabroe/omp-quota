@@ -1116,6 +1116,8 @@ const STATS_RAW = JSON.stringify({
     totalInputTokens: 5469798,
     totalOutputTokens: 1232622,
     cacheRate: 0.9756,
+    cacheSavings: 0.8123,
+    avgTokensPerSecond: 88.4,
     totalCost: 102.8004,
   },
   byModel: [
@@ -1133,6 +1135,30 @@ describe("parseStats", () => {
     expect(stats.errors).toBe(10);
     expect(stats.cost).toBeCloseTo(102.8004);
     expect(stats.cacheRate).toBeCloseTo(0.9756);
+    expect(stats.cacheSavings).toBeCloseTo(0.8123);
+    expect(stats.tokensPerSecond).toBeCloseTo(88.4);
+  });
+
+  test("Kostenanteil und Providername je Modell", () => {
+    const { stats } = usage.parseStats(STATS_RAW);
+    const byName = {};
+    for (const m of stats.models)
+      byName[m.name] = m;
+    expect(byName["claude-opus-5"].share).toBeCloseTo(94.28 / 102.8004, 5);
+    expect(byName["glm-5.3"].share).toBeCloseTo(3.99 / 102.8004, 5);
+    // Abo-Modell ohne Kosten: Anteil 0 — kein Meter, kein falscher Anteil.
+    expect(byName["MiniMax-M3"].share).toBe(0);
+    // Anzeigename kommt aus der Registry, nicht aus der Roh-ID.
+    expect(byName["glm-5.3"].providerName).toBe("Z.ai");
+    expect(byName["claude-opus-5"].providerName).toBe("Anthropic");
+  });
+
+  test("Anteil 0 ohne messbare Gesamtkosten", () => {
+    const { stats } = usage.parseStats(JSON.stringify({
+      overall: { totalCost: 0 },
+      byModel: [{ model: "a", provider: "x", totalRequests: 3, totalCost: 2 }],
+    }));
+    expect(stats.models[0].share).toBe(0);
   });
 
   test("Modelle nach Kosten absteigend, bei Gleichstand nach Last", () => {
