@@ -86,7 +86,7 @@ refreshStats() (popup open only) ──► Usage.js: parseStats()
 | `providers/` | One descriptor per provider whose name spelling or behavior deviates from derivation (5 files; `anthropic`, `google-antigravity` deliberately none) |
 | `usage.sh` | PATH-robust wrapper: `omp usage --json`, `history` → `--history --days 7`, `stats` → `omp stats --json`; timeouts, JSON guarantee |
 | `tests/` | `bun test` suites + `load.js` (QML-library loader for Bun) |
-| `scripts/analyze.js` | Static analysis (`bun scripts/analyze.js`): rules the test suite cannot express — see below |
+| `scripts/sync-providers.js` | Regenerates the marked registry block in `Providers.js` from `providers/*.js` (`--check` for CI/drift test) |
 | `.omp/skills/` | Two project skills: `omp-quota-provider` (add a provider) and `omp-quota-plugin` (the widget itself — settings, lifecycle, colours, `usage.sh`). Both are required; the `skill` rule enforces existence, frontmatter and API references |
 | `.github/workflows/tests.yml` | CI: `bun test` on push/PR to `main` |
 
@@ -259,9 +259,11 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
   `unlimitedWindows`); unknown IDs get `fallbackName()` titlecasing
   (`some-new-provider` → "Some New Provider", empty → "Unbekannt") — the
   fallback name never enters `strip`. The core never null-checks fields.
-- Adding a provider = create `providers/<Name>.js` + one `.import` and one
-  `PLUGINS` entry in `Providers.js` (imports alphabetical by filename). Both
-  are required; the registry consistency test catches a missing half.
+- Adding a provider = create `providers/<Name>.js`, then run
+  `bun scripts/sync-providers.js` — it writes the marked registry block in
+  `Providers.js` (`.import` lines + `PLUGINS`, alphabetical by filename) and
+  validates every descriptor while loading it. Hand edits to the block are
+  caught by the sync drift test (`providers.test.js` runs `--check`).
 - Full procedure with acceptance steps: `.omp/skills/omp-quota-provider/SKILL.md`.
 
 ### Shell (`usage.sh`)

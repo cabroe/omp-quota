@@ -101,18 +101,19 @@ als Kontingent. Die Zeile wird nicht gelöscht, sondern als `∞ unbegrenzt` gez
 Bevor du hier etwas einträgst: `omp usage --history` als Beleg heranziehen. Ein einzelner
 0-%-Snapshot ist nur ein frisch zurückgesetztes Fenster.
 
-## 5. In `Providers.js` registrieren
+## 5. Registry synchronisieren
 
-Zwei Zeilen, beide nötig — eine Datei ohne `PLUGINS`-Eintrag ist stumm:
+Ein einziger Befehl — `scripts/sync-providers.js` schreibt den markierten Block
+in `Providers.js` (Imports + `PLUGINS`) alphabetisch selbst und lädt dabei jede
+Datei zur Validierung (fehlende `id`/`name`, verbotenes `strip` brechen ab):
 
-```js
-.import "providers/MistralCode.js" as MistralCodePlugin   // alphabetisch nach Dateiname
-
-var PLUGINS = [
-  …,
-  MistralCodePlugin.descriptor
-];
+```sh
+bun scripts/sync-providers.js
 ```
+
+Nichts an `Providers.js` von Hand editieren: der Drift-Test
+(`tests/providers.test.js`, `--check`) schlägt sonst an. QML verlangt statische
+`.import`-Zeilen, deshalb der Generator statt Laufzeit-Autoerkennung.
 
 ## 6. Tests erweitern
 

@@ -11,6 +11,7 @@
 //     Provider still ("Datei angelegt, Import vergessen") oder die
 //     Aggregation wirft beim Laden ("Import eingetragen, Datei gelöscht").
 import { describe, test, expect } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -183,6 +184,19 @@ describe("Registry-Konsistenz", () => {
       expect(seen.has(id)).toBe(false);
       seen.add(id);
     }
+  });
+
+  // Der Registry-Block in Providers.js wird von scripts/sync-providers.js
+  // geschrieben. Wer an ihm (oder an providers/) vorbei editiert und den
+  // Sync vergessen hat, wird hier erwischt — genau der Fall, den die zwei
+  // Konsistenztests oben nur zufällig abdecken.
+  test("Registry-Block ist mit providers/ synchronisiert", () => {
+    const result = spawnSync(
+      "bun",
+      ["scripts/sync-providers.js", "--check"],
+      { cwd: join(PROVIDERS_DIR, ".."), encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
   });
 
   // Ein Plugin trägt nur ID und Name als Pflicht; alles Optionale füllt

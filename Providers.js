@@ -21,14 +21,14 @@
 // Die Strip-Tokens stehen NICHT im Plugin: sie sind aus ID und
 // Anzeigenamen ableitbar, siehe `stripTokens()`.
 //
-// Einen neuen Provider anbinden kostet genau zwei Schritte:
-//
-//   1. Eine Datei in `providers/<Name>.js` mit `var descriptor = {...}`.
-//   2. Hier einen `.import` plus einen Eintrag im `PLUGINS`-Array.
-//
-// Sortierung der Imports ist alphabetisch nach Dateiname, damit Diffs
-// beim Hinzufügen stabil bleiben.
+// Einen neuen Provider anbinden ist ein einziger Schritt: eine Datei in
+// `providers/<Name>.js` mit `var descriptor = {...}`, dann
+// `bun scripts/sync-providers.js` — der schreibt den markierten
+// Registry-Block hier (Imports und PLUGINS-Array) selbst, alphabetisch
+// nach Dateiname. QML verlangt statische .import-Zeilen, deshalb der
+// Generator statt Laufzeit-Autoerkennung.
 
+// >>> provider-plugins >>>
 .import "providers/GitHubCopilot.js" as GitHubCopilotPlugin
 .import "providers/MinimaxCode.js" as MinimaxCodePlugin
 .import "providers/OpenAICodex.js" as OpenAICodexPlugin
@@ -42,6 +42,7 @@ var PLUGINS = [
   OpenRouterPlugin.descriptor,
   ZaiPlugin.descriptor
 ];
+// <<< provider-plugins <<<
 
 // Tokens, die aus einem Limit-Label gestrichen werden, weil sie im
 // Abschnittstitel schon stehen. Quelle sind ID und Anzeigename, nicht eine
