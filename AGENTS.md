@@ -279,8 +279,14 @@ omarchy-shell cabroe.omp-quota toggle     # IPC smoke test: open | close | toggl
 - `OMP_TIMEOUT=20` (`timeout -k 2 20`), `--fresh` invalidate gets its own
   3 s budget; exit 124 and 137 both report as timeout with captured stderr.
   stdout capped at 5 MB, stderr at 2 KB.
-- PATH search order: `command -v omp`, mise shims, `~/.local/bin`,
-  `~/.bun/bin`, `/usr/local/bin`, `/usr/bin`, last `mise which omp`.
+- PATH search order: `command -v omp` (absolute, executable paths only — a
+  relative `PATH` entry plus the plugin dir as cwd could otherwise run a
+  local file named `omp`), mise shims, `~/.local/bin`, `~/.bun/bin`,
+  `/usr/local/bin`, `/usr/bin`, last `mise which omp`.
+- Two different mode arguments in one call (`usage.sh history stats`) are a
+  caller error and emit `{"error": "Widersprüchliche Modi: …"}` before the
+  first omp start; the same mode twice is harmless, unknown flags stay
+  inconsequential.
 
 ### Never (each of these was a real bug)
 
