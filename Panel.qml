@@ -611,7 +611,10 @@ Panel {
           spacing: Style.space(12)
 
           PanelHero {
-            title: "Kontingente"
+            // Der Hero trägt den Namen des Widgets, nicht den der Ansicht —
+            // "Kontingente" ist der erste Tab darunter und stünde sonst
+            // doppelt auf dem Schirm.
+            title: "omp-quota"
             // Die Zahl bleibt stehen, solange es eine gibt — ein
             // fehlgeschlagener Abruf macht die letzte Messung nicht falsch,
             // nur alt. Das sagt die Fehlerkarte darunter.
