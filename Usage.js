@@ -998,7 +998,7 @@ function tips(report, series, stats, alarmAt, nowMs) {
 
   if (spare !== null && spareCount >= 2 && spare.fraction <= SPARE_FRACTION)
     out.push({
-      text: "Freie Kapazität: " + spare.name + " (" + Math.round(spare.fraction * 100) + "%)",
+      text: "Freie Kapazität: " + spare.name + " (" + Math.round((1 - spare.fraction) * 100) + "% frei)",
       alarm: false
     });
 

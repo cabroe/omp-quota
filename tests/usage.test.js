@@ -1314,7 +1314,7 @@ describe("tips", () => {
     const out = usage.tips(report, {}, null, 0.9, NOW);
     expect(out.length).toBe(2);
     expect(out[0].alarm).toBe(true);
-    expect(out[1].text).toBe("Freie Kapazität: MiniMax Code (6%)");
+    expect(out[1].text).toBe("Freie Kapazität: MiniMax Code (94% frei)");
   });
 
   test("keine freie Kapazität über dem Viertel oder mit nur einem Provider", () => {
