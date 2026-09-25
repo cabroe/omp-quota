@@ -19,7 +19,7 @@
 // gibt es im QML-Dialekt nicht. Der statische .import bleibt QML-Pflicht —
 // dieser Script macht ihn nur wartungsfrei.
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load } from "../tests/load.js";
@@ -48,23 +48,43 @@ function fail(message) {
 
 // providers/*.js alphabetisch nach Dateiname — die Reihenfolge, die der
 // Analyzer als stable Diffs fordert und der alte Handzustand schon hatte.
+// Nur reguläre Dateien: ein Verzeichnis namens `dir.js` ließ load() mit
+// EISDIR und nacktem Stacktrace abstürzen.
 const files = readdirSync(providersDir)
-  .filter((f) => f.endsWith(".js"))
+  .filter((f) => f.endsWith(".js") && statSync(join(providersDir, f)).isFile())
   .sort();
+
+// Der Dateiname wird zum QML-Import-Alias, also muss er ein gültiger
+// Identifier sein. `A-B.js` ergab `A-BPlugin` — in QML eine Subtraktion,
+// die das ganze Widget mit einem Syntaxfehler stehen ließ; `1x.js` einen
+// Identifier, der mit einer Ziffer beginnt. Beides fällt hier auf, nicht
+// erst nach `omarchy restart shell`.
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*\.js$/;
 
 const entries = [];
 for (const file of files) {
+  if (!NAME_RE.test(file))
+    fail(
+      `providers/${file}: Dateiname ergibt keinen gültigen QML-Alias. Erlaubt sind Buchstaben, Ziffern und _, beginnend mit Buchstabe oder _ (z. B. GitHubCopilot.js).`,
+    );
   // Absoluter Pfad: load() löst relative Pfade gegen tests/ auf, der Sync
   // aber gegen sein --root — bei Temp-Fixtures sonst die falsche Datei.
-  const plugin = load(join(providersDir, file), ["descriptor"]);
+  let plugin;
+  try {
+    plugin = load(join(providersDir, file), ["descriptor"]);
+  } catch (err) {
+    fail(`providers/${file} ist nicht ladbar: ${err.message}`);
+  }
   const d = plugin.descriptor;
+  if (!d || typeof d !== "object")
+    fail(`providers/${file}: descriptor ist kein Objekt.`);
   if (!d.id || !d.name)
     fail(`providers/${file}: Descriptor braucht id und name.`);
   if ("strip" in d)
     fail(`providers/${file}: strip ist verboten — stripTokens() leitet ab.`);
   // Alias = Dateiname ohne Endung + "Plugin" (GitHubCopilot.js ->
   // GitHubCopilotPlugin). Kollisionen sind ausgeschlossen, weil der Alias
-  // 1:1 aus dem eindeutigen Dateinamen entsteht.
+  // 1:1 aus dem eindeutigen, oben validierten Dateinamen entsteht.
   entries.push({ file, alias: file.replace(/\.js$/, "") + "Plugin" });
 }
 

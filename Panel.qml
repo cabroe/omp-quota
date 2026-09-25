@@ -907,11 +907,15 @@ Panel {
                 Row {
                   width: parent.width
 
-                  // Zwei benannte Maße, je nachdem was sie begrenzen:
-                  // lead = links (Name + Provider), tail = rechts (Last +
-                  // Kosten). Titel-, Provider- und Spacer-Breite ziehen
-                  // dieselben Werte ab — dieselbe Regel wie in LimitRow.
-                  readonly property real lead: modelName.implicitWidth + (modelProvider.visible ? modelProvider.width + modelProvider.leftPadding : 0)
+                  // Drei benannte Maße, alle aus GEKAPPTEN Breiten: der
+                  // Provider-Slot hängt nur an der Zeilenbreite (kein
+                  // Zirkel), der Name bekommt den Rest, der Spacer zieht
+                  // exakt dieselben Werte ab. Vorher rechnete `lead` mit
+                  // `modelName.implicitWidth` — sobald der Name gekappt
+                  // wurde, war der Spacer 0 und Last/Kosten liefen über
+                  // die rechte Popup-Kante hinaus. Dieselbe Regel wie in
+                  // LimitRow: kappen und rechnen mit demselben Maß.
+                  readonly property real providerSlot: modelProvider.visible ? modelProvider.width + modelProvider.leftPadding : 0
                   readonly property real tail: modelReqs.implicitWidth + modelCost.implicitWidth
 
                   Text {
@@ -922,7 +926,7 @@ Panel {
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     elide: Text.ElideRight
-                    width: Math.min(implicitWidth, Math.max(0, parent.width - parent.tail - Style.space(12)))
+                    width: Math.min(implicitWidth, Math.max(0, parent.width - parent.tail - parent.providerSlot - Style.space(12)))
                   }
 
                   Text {
@@ -942,7 +946,7 @@ Panel {
                   }
 
                   Item {
-                    width: Math.max(0, parent.width - parent.lead - parent.tail)
+                    width: Math.max(0, parent.width - modelName.width - parent.providerSlot - parent.tail)
                     height: 1
                   }
 

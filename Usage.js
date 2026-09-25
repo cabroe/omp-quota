@@ -833,10 +833,15 @@ function parseStats(raw) {
     if (name.length === 0)
       continue;
     var cost = num(entry.totalCost);
+    var providerId = String(entry.provider || "").trim();
     models.push({
       name: name,
-      provider: String(entry.provider || "").trim(),
-      providerName: Providers.resolve(String(entry.provider || "").trim()).name,
+      provider: providerId,
+      // Ohne Provider-ID bleibt der Name leer statt "Unbekannt": in der
+      // Kopfzeile eines Kontingents MUSS ein Name stehen, hier ist er ein
+      // Zusatz hinter dem Modellnamen — und "Unbekannt" behauptet einen
+      // Provider, den omp gar nicht gemeldet hat.
+      providerName: providerId.length > 0 ? Providers.resolve(providerId).name : "",
       requests: Math.round(num(entry.totalRequests)),
       cost: cost,
       // Anteil an den Gesamtkosten: treibt den Meter unter der Zeile.
@@ -1043,8 +1048,11 @@ function costDriver(stats) {
     if (!isFinite(cost) || cost <= 0 || cost / totalCost < COST_DRIVER_SHARE)
       break;
     var requests = num(model.requests);
+    // Auf 100 % gekappt wie der Anteils-Meter in der Analyse-Ansicht:
+    // meldet omp eine Modellsumme über `overall.totalCost` (Rundung,
+    // Teilmenge), stand hier "120% der Kosten" neben einem vollen Meter.
     var text = "Kostentreiber: " + String(model.name || "")
-      + " — " + Math.round((cost / totalCost) * 100) + "% der Kosten";
+      + " — " + Math.round(Math.min(1, cost / totalCost) * 100) + "% der Kosten";
     if (isFinite(requests) && isFinite(totalRequests) && totalRequests > 0)
       text += ", " + Math.round((requests / totalRequests) * 100) + "% der Anfragen";
     return { text: text, alarm: false };

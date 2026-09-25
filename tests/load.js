@@ -23,6 +23,20 @@ const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
 // matchen.
 const EXPORT_RE = /^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm;
 
+// Der Export-Scan läuft über den Quelltext OHNE Blockkommentare. Ein
+// auskommentierter Altbestand wie
+//   /*
+//   var alterProvider = ...;
+//   */
+// wurde sonst als Export gesammelt, der Funktionskörper führt ihn aber nie
+// aus — `return { alterProvider: alterProvider }` warf ReferenceError und
+// riss jeden Test und jedes Script mit, das die Library lädt. Nur für den
+// Scan strippen, nicht für die Auswertung: Zeilennummern und Semantik des
+// ausgeführten Codes bleiben unangetastet.
+function withoutBlockComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 // Eine `.import "pfad.js" as NS`-Direktive. NS folgt den QML-Bezeichner-
 // Regeln; wir setzen hier nur die minimale JavaScript-Teilmenge.
 const IMPORT_RE = /^\.import\s+"([^"]+)"\s+as\s+([A-Za-z_$][\w$]*)\s*$/gm;
@@ -62,8 +76,9 @@ function loadInternal(relativePath, dir, cache) {
   // sie unten einzeln als Funktionsrückgabe verpacken.
   const exportNames = [];
   const seen = new Set();
+  const scanned = withoutBlockComments(source);
   let match;
-  while ((match = EXPORT_RE.exec(source)) !== null) {
+  while ((match = EXPORT_RE.exec(scanned)) !== null) {
     const name = match[1];
     if (!seen.has(name)) {
       seen.add(name);

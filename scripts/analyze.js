@@ -477,7 +477,13 @@ function checkSkillDrift(root, addFinding) {
     } catch {
       return; // Fehlende Kerndatei melden andere Regeln.
     }
-    for (const m of src.matchAll(pattern)) declared.add(m[1]);
+    // Blockkommentare raus, bevor deklarierte Namen gesammelt werden: ein
+    // auskommentierter Altbestand (`/* var alterName = … */`) hätte sonst
+    // als echte Deklaration gezählt und eine Skill durchgewunken, die
+    // einen längst gelöschten Namen nennt — genau der Drift, den diese
+    // Regel finden soll.
+    for (const m of src.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(pattern))
+      declared.add(m[1]);
   };
   // QML-JS-Libraries: `var x = …` / `function x(…)` am Zeilenanfang.
   collect("Providers.js", /^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm);

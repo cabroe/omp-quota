@@ -1161,6 +1161,17 @@ describe("parseStats", () => {
     expect(stats.models[0].share).toBe(0);
   });
 
+  test("Modell ohne Provider: leerer Name statt \"Unbekannt\"", () => {
+    // Die Provider-Zeile ist hinter dem Modellnamen nur ein Zusatz und wird
+    // bei leerem Text ausgeblendet. Der resolve()-Fallback hätte dort einen
+    // Provider behauptet, den omp gar nicht gemeldet hat.
+    const { stats } = usage.parseStats(JSON.stringify({
+      overall: { totalCost: 10 },
+      byModel: [{ model: "lokal", totalCost: 5 }],
+    }));
+    expect(stats.models[0].providerName).toBe("");
+  });
+
   test("Modelle nach Kosten absteigend, bei Gleichstand nach Last", () => {
     const { stats } = usage.parseStats(STATS_RAW);
     expect(stats.models.map((m) => m.name)).toEqual([
@@ -1318,6 +1329,19 @@ describe("tips", () => {
     const out = usage.tips(report, {}, stats, 0.9, NOW);
     expect(out.length).toBe(1);
     expect(out[0].text).toBe("Kostentreiber: claude-opus-5 — 92% der Kosten, 29% der Anfragen");
+  });
+
+  test("Kostentreiber-Anteil wird wie der Meter auf 100% gekappt", () => {
+    // omp kann eine Modellsumme über `overall.totalCost` melden (Rundung,
+    // Teilmenge). Der Anteils-Meter kappt auf 1 — der Tip daneben zeigte
+    // "120% der Kosten" und widersprach der Zeile, die er erklärt.
+    const { stats } = usage.parseStats(JSON.stringify({
+      overall: { totalCost: 50, totalRequests: 10 },
+      byModel: [{ model: "teuer", totalRequests: 8, totalCost: 60 }],
+    }));
+    const out = usage.tips({ providers: [] }, {}, stats, 0.9, NOW);
+    expect(stats.models[0].share).toBe(1);
+    expect(out[0].text).toContain("100% der Kosten");
   });
 
   test("kein Kostentreiber unterhalb der halben Kosten und ohne Statistik", () => {

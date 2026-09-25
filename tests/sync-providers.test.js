@@ -9,7 +9,7 @@
 //   - Ungültige Descriptoren brechen ab, ohne die Registry anzufassen.
 import { describe, test, expect, beforeAll } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,5 +127,30 @@ describe("sync-providers.js", () => {
     expect(run.status).toBe(1);
     expect(run.stderr).toContain("B.js");
     expect(readFileSync(providersJs, "utf8")).toBe(healthy);
+  });
+
+  test("Dateiname ohne gültigen QML-Alias: Abbruch ohne Schreiben", () => {
+    // `A-B.js` ergab den Alias `A-BPlugin` — in QML eine Subtraktion, also
+    // ein Syntaxfehler, der erst nach `omarchy restart shell` aufgefallen
+    // wäre. Der Sync muss ihn vorher abfangen.
+    const healthy = "header\n" + canonical() + "rest\n";
+    fixture(healthy);
+    writeFileSync(join(root, "providers", "A-B.js"), PLUGIN_B);
+    const run = runSync();
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain("A-B.js");
+    expect(readFileSync(providersJs, "utf8")).toBe(healthy);
+    rmSync(join(root, "providers", "A-B.js"));
+  });
+
+  test("Verzeichnis mit .js-Endung wird ignoriert, nicht geladen", () => {
+    // Ein Verzeichnis `dir.js` ließ load() mit EISDIR und nacktem
+    // Stacktrace abstürzen, statt den Sync normal durchlaufen zu lassen.
+    fixture("header\n" + canonical() + "rest\n");
+    mkdirSync(join(root, "providers", "dir.js"), { recursive: true });
+    const run = runSync();
+    expect(run.status).toBe(0);
+    expect(readFileSync(providersJs, "utf8")).toBe("header\n" + canonical() + "rest\n");
+    rmSync(join(root, "providers", "dir.js"), { recursive: true });
   });
 });
