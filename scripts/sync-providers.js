@@ -73,10 +73,32 @@ const block = [
 ].join("\n");
 
 const source = readFileSync(providersJs, "utf8");
+// Genau ein Paar Marker: eine doppelte Marker-Zeile (z. B. als Diff-
+// Vorlage stehen geblieben) würde indexOf zum ersten Vorkommen greifen
+// lassen und den echten Block beim Ersetzen herausschneiden — kaputte
+// Providers.js, und ein erneuter Lauf heilt das nicht. Deshalb zählen
+// statt nur finden, mit einer Meldung, die die Ursache nennt.
+const countOf = (marker) =>
+  source.split(marker).length - 1;
+const beginCount = countOf(MARKER_BEGIN);
+const endCount = countOf(MARKER_END);
+if (beginCount !== 1)
+  fail(
+    beginCount === 0
+      ? `${MARKER_BEGIN} fehlt in Providers.js.`
+      : `${MARKER_BEGIN} steht ${beginCount}× in Providers.js — genau 1 erwartet, doppelte Marker-Zeile entfernen.`,
+  );
+if (endCount !== 1)
+  fail(
+    endCount === 0
+      ? `${MARKER_END} fehlt in Providers.js.`
+      : `${MARKER_END} steht ${endCount}× in Providers.js — genau 1 erwartet, doppelte Marker-Zeile entfernen.`,
+  );
+
 const begin = source.indexOf(MARKER_BEGIN);
 const end = source.indexOf(MARKER_END);
-if (begin === -1 || end === -1 || end < begin)
-  fail(`Providers.js braucht die Marker\n  ${MARKER_BEGIN}\n  ${MARKER_END}\n(mit Zeilenumbruch) um den Registry-Block.`);
+if (end < begin)
+  fail(`Providers.js: ${MARKER_END} steht vor ${MARKER_BEGIN} — Block-Reihenfolge kaputt.`);
 
 const next =
   source.slice(0, begin) + block + source.slice(end + MARKER_END.length);
