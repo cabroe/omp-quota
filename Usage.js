@@ -205,6 +205,14 @@ function normalizeLimit(entry, plugin) {
   // keinen Absolutwert und keinen Reset: das Ende einer Woche ohne Limit
   // ändert nichts.
   var unlimited = isUnlimited(plugin, entry, fraction);
+  // Ein erschöpftes Kontingent kann als `usedFraction: 0` ankommen — omp
+  // signalisiert "voll" über `status`, nicht über die Zahl. Ohne diese
+  // Korrektur stünde "0 %" in Alarmfarbe neben einem unsichtbarem Meter.
+  // Nur der widersprüchliche Fall wird nachgezogen: echte Teilwerte
+  // (erschöpft bei 0.9) bleiben stehen — die Zahl ist dann echte Nutzung,
+  // und der Vertrag "status exhausted markiert das Limit" pinnt 0.9.
+  if (!unlimited && status === "exhausted" && !(fraction > 0))
+    fraction = 1;
   return {
     id: String(entry.id || ""),
     title: limitTitle(entry.label, window.label, plugin.strip),

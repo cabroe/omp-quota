@@ -236,6 +236,20 @@ describe("normalizeLimit / exhausted", () => {
     expect(out[0].fraction).toBe(0.9);
   });
 
+  test("exhausted mit usedFraction 0 zeigt 100%% statt 0%% in Alarmfarbe", () => {
+    // QMLRuntime-Fund: status:"exhausted" mit usedFraction: 0 (z.B. frisch
+    // zurückgesetztes Fenster vor dem ersten Verbrauch) lieferte "0 %"-Text in
+    // Alarmfarbe bei unsichtbarem Meter. Fix: fraction wird auf 1 gezogen.
+    const out = usage.dedupe(
+      [rawLimit({ status: "exhausted", amount: { usedFraction: 0 } })],
+      NEUTRAL,
+    );
+    expect(out[0].exhausted).toBe(true);
+    expect(out[0].statusLabel).toBe("erschöpft");
+    expect(out[0].fraction).toBe(1);
+    expect(out[0].percentText).toBe("100%");
+  });
+
   test("ohne status bleibt alles ok", () => {
     const out = usage.dedupe([rawLimit()], NEUTRAL);
     expect(out[0].status).toBe("ok");
